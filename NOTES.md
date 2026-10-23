@@ -1,3 +1,36 @@
+# ios-cheeseburger (OnePlus 5 A5000, MSM8998) - working notes
+
+## Cheeseburger handoff (2026-10-23, read first)
+
+**State: stage 0, not run on a phone yet.** Forked from ios-topaz at
+`e477291` (branch `cheeseburger`). Done and checked off-device:
+- `xnu/patches/` = sweet 0001-0079 + topaz 0080-0082; 0083+ moved to
+  `xnu/patches-topaz/`. 0010/0012 retargeted to the splash at `0x9d400000`
+  1080x1920 (32 MB block base stays `0x9c000000`). Applied cleanly to
+  xnu-8796.141.3 (staging scripts need macOS `xcrun`, not run here). No CI
+  kernel build yet.
+- `shim/`: OnePlus 5 constants, Gold hand-off always, no SM6225 cpufreq,
+  boot.img v0 (`Image.gz` + appended DTB), probe pages in `probe.c`.
+  Builds without warnings; no ARMv8.1+ instructions; worst stack < 1 KB on
+  the 4 KB secondary stack. Pages 1-3 rendered on the host with simulated
+  CPU values and the real mainline DTB (layout fits 1080x1920).
+- `tools/mkadt.py --highmem`: RAM `0x1_00000000` + `0xfcc00000` (guess,
+  confirm on probe page 2), GIC/UFS/FB for MSM8998, no `wlan` node.
+- Probe image built with the mainline Linux DTB (msm-id 292/0x20001,
+  board-id 8/0/16859/23). Not yet booted.
+
+**Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
+photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
+range, CI kernel build, stage 1 (XNU to the root mount, read-only).
+
+**Assumptions to verify (not observations):** Kryo 280 Gold has the 16K
+granule and Silver does not (as topaz measured on Kryo 260); the splash is
+at `0x9d400000` (mainline) rather than `0x9d600000` (OnePlus DT); the
+command-mode panel shows CPU writes (mainline simplefb suggests yes); ABL
+passes the v0 ramdisk in `/chosen`.
+
+---
+
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
 ## Agent handoff / active work (2026-10-15, latest)
