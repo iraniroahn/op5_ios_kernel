@@ -19,13 +19,14 @@ import adt  # noqa: E402
 # use --highmem.
 PHYS_BASE = 0xb0000000
 MEM_SIZE = 0x4d000000
-# --highmem (phone only): the upper DDR bank. On MSM8998 DDR starts at
-# 0x80000000 and every fixed carve-out (hyp, TZ, modem, ADSP, splash, OnePlus
-# ramoops/param/mtp) is in the low 2G; ABL fills in the real size. 3.95G fits
-# both the 6G (4G upper bank) and the 8G model. CONFIRM against probe page 2
-# (MEMORY lines) before the first xnu boot.
+# --highmem (phone only): the upper DDR bank. Probe page 2 on the 6 GB A5000
+# (2026-10-23): ABL's /memory is <0x40000000 0xC0000000>, <0x1_00000000
+# 0xBD8C0000>, and every carve-out (hyp, TZ, modem, ADSP, splash, OnePlus
+# ramoops/param/mtp) is below 4 GB. XNU gets the upper bank rounded down to
+# 32 MB: 0xBC000000 (3 GB; an iPhone 8 has 2 GB). The 8 GB model has more,
+# set HIGHSIZE= after checking its probe page 2.
 HIGH_PHYS_BASE = 0x100000000
-HIGH_MEM_SIZE = int(__import__("os").environ.get("HIGHSIZE", "0xfcc00000"), 16)
+HIGH_MEM_SIZE = int(__import__("os").environ.get("HIGHSIZE", "0xbc000000"), 16)
 # topaz's --midmem (RAM from 0x80000000) is NOT safe here: on MSM8998 that
 # range holds the hyp/TZ/modem carve-outs (XPU-protected), see build().
 # /arm-io children are relative to this; it must not be 0 (serial_init bails)

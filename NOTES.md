@@ -35,6 +35,27 @@ directory stays plaintext on disk; host-tested on ext4, not yet run on the phone
 write guard + log inside the container) added; host-tested, applies after 0083, not
 compiled. `mkadt.py --container MAP`, `sweet-log-pull.sh OUT container`.
 
+**PROBE RESULTS (phone, 2026-10-23, photos IMG_5428-5431):**
+- Screen: shim text at the top edge, no shift: splash is `0x9d400000`, the command-mode
+  panel shows CPU writes.
+- Silver MIDR 0x51AF8014 MMFR0 0x1122 (tg16=0); Gold MIDR 0x51AF8001 MMFR0 0x101122
+  (tg16=1). All 8 cores answered CPU_ON. ARMv8.0: no LSE/PAN/RCpc. ISAR0 0x11120.
+- Hand-off to gold 0x100 works. GIC on gold: vtimer 0x1E irqs/300 ms, SGI1 10/10, GICR of
+  0x101-0x103 found. PSCI 1.0; SMCCC_VERSION, MIGRATE_INFO_TYPE, SYSTEM_RESET2 unsupported.
+- **SPEED: silver 0x78903 ticks, gold 0xEA6000 (~31x slower): gold runs at about XO
+  (19.2 MHz) after CPU_ON.** MSM8998 has no cpufreq-hw; the gold PLL/OSM is programmed by
+  the Linux clock driver, not by ABL. Must be solved before xnu on gold is usable.
+- RAM (/memory): <0x40000000 0xC0000000>, <0x1_00000000 0xBD8C0000> = ~6 GB. The old
+  HIGH_MEM_SIZE 0xfcc00000 would have run past the end of RAM: now 0xBC000000.
+- PMIC: arbiter 0x30000000 (v3), REVID type 0x51 sub 0x14 (PM8998). PON apid 0x004 rt 0;
+  vol- GPIO5 apid 0x0DA st1 0x81, vol+ GPIO6 apid 0x0DB st1 0x81 (idle high). Key-press
+  changes not captured yet. L28 apid 0x092 owner 4 (RPM), **disabled** (touch rail off);
+  L6 (ppid 0x45) not in the apid map. GCC BLSP1 AHB and QUP5 clocks off; TLMM 87/88/89/125
+  all func 0. Touch needs: RPM vote for L28, clocks, pinmux, QUP I2C, RMI4.
+- UFS page (4/4) not photographed yet.
+- Container check (`ioscont check /data/ios`): OK.
+- Repo pushed to github.com/iraniroahn/op5_ios_kernel (main); CI run 39938581281.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).
