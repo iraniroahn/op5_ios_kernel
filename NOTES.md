@@ -56,6 +56,12 @@ compiled. `mkadt.py --container MAP`, `sweet-log-pull.sh OUT container`.
   addressing), ABL leaves HCE=1, HCS=0x10F; TEST UNIT READY / READ CAPACITY / READ all
   rc 0. LUN0 last LBA 0xD7D7FF (4 KiB), valid GPT (32 entries); userdata at LBA 0x14F40,
   0xD688 MiB, ext4. The sweet UFS driver should work unchanged.
+- **Clock page (third run, IMG_5438): both OSMs disabled** (silver ver 0xD0000, gold 0x14,
+  en 0, cycle counters 0). Silver PLL 0x17916000 mode 7, L 0x51 (1555.2 MHz), locked; gold
+  PLL 0x17816000 mode 7, L 0x20 (614.4 MHz), locked; ACD gfmux 0 both. So gold's PLL runs
+  but its cluster RCG (CMD 0x17811050 / CFG 0x17811054, DT qcom,apcs-*-rcgr) still selects
+  XO. Power key read OK (pon rt 0x01); volume presses not captured (live view had ended).
+  Next image (shim-boot-gold.img) switches the gold RCG to GPLL0 (0x400) then PLL main (0x300).
 - That run used the OLD probe image (no page 1b), keys still not pressed on camera.
 - **CI run 39938581281: success** (8 min), artifact xnu-kernel 61 MB. Not downloadable
   from this cloud session: the network policy blocks the Azure blob host GitHub uses.

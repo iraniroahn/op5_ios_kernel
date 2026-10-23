@@ -384,9 +384,13 @@ void probe_keys_live(unsigned seconds)
 	con_skip();
 	con_str("KEYS", "press power, vol+, vol- now:");
 	int r = con_row_get();
+	uint64_t t0 = now();
 	while (now() < end) {
 		char b[72], *p = b;
 		con_row_set(r);
+		p = st(p, "t=");
+		p = dec(p, (now() - t0) / rsr("cntfrq_el0"));
+		p = st(p, "s ");
 		p = reg(p, "pon=", spmi_rd(apid_pon, 0x10));
 		p = reg(p, "vol-=", spmi_rd(apid_g5, 0x08));
 		reg(p, "vol+=", spmi_rd(apid_g6, 0x08));

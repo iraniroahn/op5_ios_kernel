@@ -251,6 +251,29 @@ static uint64_t speed_ticks(void)
  * clock PSCI CPU_ON gives it; the SPEED line shows it.
  */
 static volatile int probe_mode;
+
+/*
+ * Gold cluster clock mux (APCS RCG at 0x17811050 CMD / 0x17811054 CFG):
+ * select source sel (CFG bits 10:8; 0x300 PLL main, 0x400 GPLL0) and latch
+ * it with CMD UPDATE|ROOT_EN. Returns 1 when the update bit clears; on a
+ * timeout the old CFG is put back.
+ */
+static int gold_rcg_select(uint32_t sel)
+{
+	uint32_t old = rd32(0x17811054);
+	wr32(0x17811054, (old & ~0x71fU) | sel);
+	wr32(0x17811050, 0x3);
+	__asm__ volatile("dsb sy" ::: "memory");
+	for (int i = 0; i < 1000; i++) {
+		if (!(rd32(0x17811050) & 1))
+			return 1;
+		delay_ms(1);
+	}
+	wr32(0x17811054, old);
+	wr32(0x17811050, 0x3);
+	__asm__ volatile("dsb sy" ::: "memory");
+	return 0;
+}
 static void __attribute__((noreturn)) probe_run(uint64_t dtb);
 
 static void __attribute__((noreturn)) gold_main(uint64_t dtb)
@@ -647,6 +670,21 @@ static void __attribute__((noreturn)) probe_run(uint64_t dtb)
 	probe_osm();
 	con_skip();
 	con_hex2("SPEED", "gold=", (uint32_t)speed_ticks(), "silver0=", (uint32_t)cpu_recs[0].ticks);
+	/*
+	 * Second probe: both OSMs are off; silver runs straight off its PLL
+	 * (L 0x51 = 1555.2 MHz), gold's PLL is locked at L 0x20 = 614.4 MHz but
+	 * gold still runs near XO: its cluster mux (APCS RCG, DT
+	 * qcom,apcs-cmd/cfg-rcgr) selects XO. Switch it like the OSM sequencer
+	 * does (clock-osm.c: GPLL_SEL 0x400, PLL_MAIN_SEL 0x300, RCG_UPDATE).
+	 */
+	con_hex2("RCG silv", "cmd=", rd32(0x17911050), "cfg=", rd32(0x17911054));
+	con_hex2("RCG gold", "cmd=", rd32(0x17811050), "cfg=", rd32(0x17811054));
+	static const uint32_t src[2] = { 0x400, 0x300 };	/* GPLL0 300 MHz, gold PLL main */
+	for (int i = 0; i < 2; i++) {
+		int ok = gold_rcg_select(src[i]);
+		con_hex2(i ? "GOLD PLL" : "GOLD GPLL", "switch=", ok, "ticks=", (uint32_t)speed_ticks());
+		con_hex2("", "cmd=", rd32(0x17811050), "cfg=", rd32(0x17811054));
+	}
 	if (!probe_osm_gold_enabled()) {
 		con_str("GOLD OSM", "disabled by the bootloader: no request sent");
 	} else {
@@ -672,7 +710,7 @@ static void __attribute__((noreturn)) probe_run(uint64_t dtb)
 	con_clear(RED);
 	con_str("PROBE", "3/4 PMIC, keys, touch I2C");
 	probe_pmic();
-	probe_keys_live(20);
+	probe_keys_live(40);
 	probe_hold(30);
 
 	stage = "ufs";
