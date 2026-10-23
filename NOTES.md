@@ -86,6 +86,16 @@ CI notes: apt on ubuntu-24.04 hung twice until unattended-upgrades was stopped a
 dpkg lock wait bounded; job logs and artifacts sit on Azure blob hosts this session's
 network policy blocks.
 
+**STAGE 1 PASSED (2026-10-23, video IMG_5457, shim-boot-xnu.img from bootimg run
+39945595145):** XNU boots on the OnePlus 5 to the root mount. Console seen: iBoot version
+cheeseburger-shim; SWEET AMFI/Sandbox/HFS/AKS/WDT/SURF/HID registered; `SWEET FB: AppleCLCD
+1080x1920 stride 4320 at 0x9d400000, presented as 750x1334` (iPhone 8 canvas, patch 0083);
+`SWEET CPU: cpu=0 mpidr=0x100 came alive; SGI1 OK`, `1/1 CPUs initialized`; `SWEET UFS:
+"userdata" on LUN 0: first block 0x14f40, 54920 MiB, read-only, DMA at 0x103ce4000`;
+`BSD root: ufsroot0` then `hfs_ValidateHFSPlusVolumeHeader: unknown Volume Signature : 20a5`
+(Android ext4, as expected) and `mount(N) failed` retried every few seconds (user stopped it
+after ~6 min). The stack sampler ran (`SMP --- sample 2`). No panic.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).
