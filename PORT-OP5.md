@@ -91,28 +91,28 @@ Rendering 750x1334 is about 2.7x fewer pixels than the iPhone X canvas, which he
 
 `sweetfb_native=1` with `mkadt.py --native` presents the raw 1080x1920 panel at 3x instead (no scaling, layout untested).
 
-## Keeping Android (no erase)
+## Keeping Android (no erase): the container file
 
-Every stage boots with `fastboot boot` from RAM, so `boot`, `system`, `vendor` and the bootloaders are never written: Android keeps booting normally when you just power on. Only the iOS root needed space, and the default plan put it over `userdata`. The alternative is a **container file inside `userdata`**:
+Every stage boots with `fastboot boot` from RAM, so `boot`, `system`, `vendor` and the bootloaders are never written: powering on normally still starts Android. The iOS root lives in one file, `/data/ios/root.img`, inside Android's `userdata`.
 
-1. With root (Magisk) or TWRP: `mkdir /data/ios && fallocate -l 16G /data/ios/root.img`, then write the HFS+ root into it through the filesystem (`dd ... of=/data/ios/root.img conv=notrunc`), so its blocks are allocated and written.
-2. Read its block list (`filefrag -v` / FIEMAP) and the `userdata` start from the GPT; `tools/mkadt.py` puts the extent list into the ADT.
-3. Kernel: the UFS root device (patch 0028 and later) translates root block numbers through that list, so iOS reads and writes only those blocks. Android sees an ordinary file and leaves it alone.
-4. The persistent kernel log (patch 0047) currently writes the last 4 MiB of `userdata`: it must move into the container (or be off with `sweetlog=0`), or it would corrupt Android's filesystem.
+**Verified on this phone (2026-10-23, rooted Pixel Experience 12):** `ioscont check /data/ios` wrote 64 MiB, the raw `userdata` blocks matched exactly (6 extents, 0 mismatched): `/data` is ext4 (blocks never move), and a directory created by root at `/data/ios` is stored unencrypted even though Android uses file-based encryption. 32 GiB free.
 
-**This phone (2026-10-23): rooted Pixel Experience 12** (last official OnePlus 5 build). Its `fstab.qcom` (PixelExperience-Devices/device_oneplus_msm8998-common, branch `twelve`) mounts `/data` as **ext4 with file-based encryption** (`fileencryption=ice`); an f2fs line exists only for a /data formatted as f2fs, with optional footer encryption. ext4 + FBE is the workable case. `tools/ioscont` (static aarch64, built by `tools/build-ioscont.sh`) proves it on the phone:
+How it works: kernel patch 0084 gives the UFS root driver an extent map (`container-extents` in `/sweet-ufs`, from `tools/mkadt.py --container`). `ufsroot0` is the file, every I/O is translated through the map, and every write must also lie inside one of the file's extents, so nothing else in Android's data can be written. The persistent kernel log uses the last 4 MiB + 4 KiB of the container, behind the HFS+ volume. Host test: 20,000 random reads and writes over 6 scattered extents land correctly; writes outside the file or across two extents are refused. Not yet compiled (CI) or run.
+
+**Install** (once the kernel boots; nothing else on the phone changes):
 
 ```sh
-adb push shim/out/ioscont /data/local/tmp/
-adb shell su -c 'mkdir -p /data/ios && chmod 700 /data/ios && /data/local/tmp/ioscont check /data/ios'
+# 1. HFS+ root image, 16 GiB (README-topaz.md, iPhone 8 IPSW), then 8 MiB more for the log
+truncate -s +8M ios16-root.img
+# 2. stream it into the unencrypted directory as root (not via /data/local/tmp or /sdcard:
+#    those are encrypted, the blocks on flash would be ciphertext)
+adb exec-in "su -c 'cat > /data/ios/root.img'" < ios16-root.img
+adb shell "su -c 'sync; /data/local/tmp/ioscont map /data/ios/root.img'" > root.map
+# 3. device tree with the map, then payload and boot image as usual
+python3 tools/mkadt.py shim/out/cb.adt --highmem --container root.map
 ```
 
-It writes a 64 MiB pattern file into `/data/ios`, maps its blocks (FIEMAP), reads them raw from `userdata` (read-only) and compares. `RESULT: OK` means the container works there. `ioscont alloc FILE GIB` and `ioscont map FILE` then create the container and print the extent list for the ADT. Tested on the host against a loop-mounted ext4 (OK, 0 mismatches).
-
-Conditions it checks (or that you can check by hand):
-- **Encryption**: `adb shell getprop ro.crypto.type`. `block` (full-disk encryption) rules it out: the blocks on flash are ciphertext and the key lives in TrustZone. `file` (file-based) works if `/data/ios` is created unencrypted (a new top-level directory created by root normally is; the kernel will check for the HFS+ signature and refuse otherwise). `none` is simplest.
-- **Filesystem**: `adb shell mount | grep ' /data '`. ext4 never moves a file's blocks. f2fs does (garbage collection) unless the file is pinned (`F2FS_IOC_SET_PIN_FILE`, as Android does for its own pinned files).
-- About 16 GB free in `/data`. A factory reset or Android's "erase all data" deletes the container.
+Rules: never move, copy over, truncate or defragment `root.img` from Android (its blocks would change). If it is ever rewritten, run `ioscont map` again and rebuild the ADT. A factory reset deletes it. Read the kernel log afterwards from Android with `tools/sweet-log-pull.sh log.txt container`.
 
 Other ways, not recommended: shrinking `userdata` (f2fs cannot shrink, and full-disk encryption keeps a footer at the end), or a USB stick over OTG (needs a USB host driver first; topaz-woa has one to port later).
 

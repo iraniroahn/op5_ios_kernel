@@ -50,7 +50,7 @@ The XNU kernel builds on GitHub's macOS runners exactly as for topaz (`gh workfl
 | --- | --- |
 | `PORT-OP5.md` | Hardware map, what changed from topaz, stages, driver work list, open questions |
 | `shim/` | Boot shim (boot.img v0, `Image.gz` + appended DTB) and the probe (`probe.c`) |
-| `xnu/patches/` | Kernel patches 0001-0083 applied by CI (0083: iPhone 8 display scaling) |
+| `xnu/patches/` | Kernel patches 0001-0084 applied by CI (0083: iPhone 8 display scaling, 0084: iOS root as a file in Android data) |
 | `xnu/patches-topaz/` | Topaz patches 0083+ (SM6225 drivers, GPU, Wi-Fi, audio), not built |
 | `tools/mkadt.py` | Apple Device Tree for the OnePlus 5 |
 | `tools/unpack_bootv0.py` | Splits a stock OnePlus 5 `boot.img` into kernel, ramdisk and DTBs |

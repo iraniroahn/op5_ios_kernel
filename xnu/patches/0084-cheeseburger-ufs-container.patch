@@ -1,0 +1,227 @@
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 40044c8..5c805eb 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -17,6 +17,14 @@
+  * Writes are refused unless boot-arg ufsrw=1 is set. Every write is checked
+  * against the partition bounds again right before it is issued, so nothing
+  * outside the named partition can be written.
++ *
++ * Container mode (cheeseburger, keeps Android): if /sweet-ufs has
++ * "container-extents", ufsroot0 is not the whole partition but one file in
++ * Android's ext4 userdata (/data/ios/root.img). The property is a list of
++ * u64 triples in 4 KiB device blocks: (file block, partition block, count),
++ * sorted by file block and gap-free from 0 (tools/mkadt.py --container).
++ * Every I/O goes through that map, and every write must also lie inside one
++ * extent, so Android's files outside the container cannot be written.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -105,6 +113,9 @@ static struct {
+ 	uint8_t lun;
+ 	uint8_t tag;
+ 	uint64_t first_block, nblocks;          /* partition, in 4 KiB device blocks */
++	uint64_t disk_blocks;                   /* size of ufsroot0: partition or container */
++	const uint64_t *ext;                    /* container extents (device tree), or NULL */
++	uint32_t next;                          /* number of extent triples */
+ 	uint32_t secsize;                       /* logical sector size for the BSD layer */
+ 	bool writable;                          /* boot-arg ufsrw=1 */
+ 	bool cache;                             /* boot-arg ufscache=1 */
+@@ -271,6 +282,44 @@ ufs_read_blocks(uint64_t lba, uint32_t count)
+ 	return ufs_scsi(cdb, sizeof(cdb), count * UFS_BLOCK, false);
+ }
+ 
++/* Container mode: is [pblk, pblk + count) (partition blocks) inside one extent? */
++static bool
++ufs_in_container(uint64_t pblk, uint32_t count)
++{
++	if (su.ext == NULL) {
++		return true;
++	}
++	for (uint32_t i = 0; i < su.next; i++) {
++		const uint64_t *e = &su.ext[3 * i];
++		if (pblk >= e[1] && pblk - e[1] < e[2] && count <= e[2] - (pblk - e[1])) {
++			return true;
++		}
++	}
++	return false;
++}
++
++/*
++ * ufsroot0 block -> absolute device block. *run = how many of want blocks
++ * are contiguous on the device from there (at least 1).
++ */
++static uint64_t
++ufs_map(uint64_t lblk, uint32_t want, uint32_t *run)
++{
++	*run = want;
++	if (su.ext == NULL) {
++		return su.first_block + lblk;
++	}
++	for (uint32_t i = 0; i < su.next; i++) {
++		const uint64_t *e = &su.ext[3 * i];
++		if (lblk >= e[0] && lblk - e[0] < e[2]) {
++			uint64_t left = e[2] - (lblk - e[0]);
++			*run = (uint32_t)MIN((uint64_t)want, left);
++			return su.first_block + e[1] + (lblk - e[0]);
++		}
++	}
++	panic("SWEET UFS: container block 0x%llx unmapped", lblk);
++}
++
+ /*
+  * WRITE(10) of count device blocks from the bounce buffer to lba. The range
+  * must lie inside the partition: this is the only place data goes out.
+@@ -280,7 +329,8 @@ ufs_write_blocks(uint64_t lba, uint32_t count)
+ {
+ 	if (!su.writable || !su.nblocks || count == 0 || count > BOUNCE_SIZE / UFS_BLOCK ||
+ 	    lba < su.first_block || lba - su.first_block >= su.nblocks ||
+-	    count > su.nblocks - (lba - su.first_block) || lba + count - 1 > UINT32_MAX) {
++	    count > su.nblocks - (lba - su.first_block) || lba + count - 1 > UINT32_MAX ||
++	    !ufs_in_container(lba - su.first_block, count)) {
+ 		printf("SWEET UFS: refusing write of %u blocks at 0x%llx\n", count, lba);
+ 		return EPERM;
+ 	}
+@@ -409,7 +459,7 @@ sweet_ufs_strategy(buf_t bp)
+ 	caddr_t vaddr = NULL;
+ 	uint64_t off = (uint64_t)buf_blkno(bp) * su.secsize;
+ 	uint32_t count = buf_count(bp);
+-	uint64_t part_bytes = su.nblocks * UFS_BLOCK;
++	uint64_t part_bytes = su.disk_blocks * UFS_BLOCK;
+ 
+ 	bool rd = buf_flags(bp) & B_READ;
+ 
+@@ -436,21 +486,26 @@ sweet_ufs_strategy(buf_t bp)
+ 		uint64_t lba = pos / UFS_BLOCK;
+ 		uint32_t skip = (uint32_t)(pos % UFS_BLOCK);
+ 		uint32_t want = MIN(count - done, BOUNCE_SIZE - skip);
+-		uint32_t blocks = (skip + want + UFS_BLOCK - 1) / UFS_BLOCK;
++		uint32_t blocks = (skip + want + UFS_BLOCK - 1) / UFS_BLOCK, run;
++		uint64_t dlba = ufs_map(lba, blocks, &run);
++		if (run < blocks) {             /* stop at the end of a container extent */
++			want = run * UFS_BLOCK - skip;
++			blocks = run;
++		}
+ 		void *bounce = (void *)(su.dma + DMA_BOUNCE);
+ 		if (rd) {
+-			error = ufs_read_blocks(su.first_block + lba, blocks);
++			error = ufs_read_blocks(dlba, blocks);
+ 			if (!error) {
+ 				memcpy(vaddr + done, (const char *)bounce + skip, want);
+ 			}
+ 		} else {
+ 			/* Partial device blocks at either end: read, merge, write back. */
+ 			if (skip || (want % UFS_BLOCK)) {
+-				error = ufs_read_blocks(su.first_block + lba, blocks);
++				error = ufs_read_blocks(dlba, blocks);
+ 			}
+ 			if (!error) {
+ 				memcpy((char *)bounce + skip, vaddr + done, want);
+-				error = ufs_write_blocks(su.first_block + lba, blocks);
++				error = ufs_write_blocks(dlba, blocks);
+ 			}
+ 		}
+ 		if (error) {
+@@ -493,7 +548,7 @@ sweet_ufs_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+ 		*f = UFS_BLOCK;
+ 		return 0;
+ 	case DKIOCGETBLOCKCOUNT:
+-		*o = su.nblocks * UFS_BLOCK / su.secsize;
++		*o = su.disk_blocks * UFS_BLOCK / su.secsize;
+ 		return 0;
+ 	case DKIOCISWRITABLE:
+ 		*f = su.writable;
+@@ -538,7 +593,7 @@ sweet_ufs_cioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
+ static int
+ sweet_ufs_psize(__unused dev_t dev)
+ {
+-	return su.ready ? (int)MIN(su.nblocks * UFS_BLOCK / su.secsize, INT_MAX) : -1;
++	return su.ready ? (int)MIN(su.disk_blocks * UFS_BLOCK / su.secsize, INT_MAX) : -1;
+ }
+ 
+ static int
+@@ -636,6 +691,31 @@ sweet_ufs_init(void)
+ 	if (error) {
+ 		return error;
+ 	}
++	su.disk_blocks = su.nblocks;
++	uint64_t const *ext = NULL;
++	unsigned int esize = 0;
++	if (SecureDTGetProperty(node, "container-extents", (void const **)&ext, &esize) == kSuccess) {
++		uint64_t total = 0;
++		uint32_t n = esize / (3 * sizeof(uint64_t));
++		for (uint32_t i = 0; i < n; i++) {
++			const uint64_t *e = &ext[3 * i];
++			/* gap-free from block 0, every extent inside the partition */
++			if (e[0] != total || e[2] == 0 || e[1] >= su.nblocks || e[2] > su.nblocks - e[1]) {
++				printf("SWEET UFS: bad container extent %u (0x%llx 0x%llx 0x%llx)\n",
++				    i, e[0], e[1], e[2]);
++				return EINVAL;
++			}
++			total += e[2];
++		}
++		if (n == 0 || esize % (3 * sizeof(uint64_t))) {
++			printf("SWEET UFS: bad container-extents property (%u bytes)\n", esize);
++			return EINVAL;
++		}
++		su.ext = ext;
++		su.next = n;
++		su.disk_blocks = total;
++		printf("SWEET UFS: container mode, %u extents, %llu MiB\n", n, total * UFS_BLOCK >> 20);
++	}
+ 
+ 	su.bmajor = bdevsw_add(-1, &sweet_ufs_bdevsw);
+ 	if (su.bmajor < 0) {
+@@ -652,7 +732,7 @@ sweet_ufs_init(void)
+ 	su.writable = (rw != 0);
+ 	su.ready = true;
+ 	printf("SWEET UFS: \"%s\" on LUN %u: first block 0x%llx, %llu MiB, %s, DMA at 0x%llx\n",
+-	    want, su.lun, su.first_block, su.nblocks * UFS_BLOCK >> 20,
++	    want, su.lun, su.first_block, su.disk_blocks * UFS_BLOCK >> 20,
+ 	    su.writable ? "read-write" : "read-only", su.dma_pa);
+ 	sweet_log_start();
+ 	sweet_sample_start();
+@@ -750,11 +830,11 @@ struct sweet_log_header {
+ static void
+ sweet_log_thread(__unused void *arg, __unused wait_result_t wr)
+ {
+-	uint64_t base = su.first_block + su.nblocks - SWEET_LOG_BLOCKS;
++	uint64_t base = su.disk_blocks - SWEET_LOG_BLOCKS;      /* ufsroot0 block */
+ 	uint64_t flushed = 0, seq = 0;
+ 	void *bounce = (void *)(su.dma + DMA_BOUNCE);
+ 
+-	printf("SWEET LOG: console log to the last %u KiB of the partition (block 0x%llx)\n",
++	printf("SWEET LOG: console log to the last %u KiB of ufsroot0 (block 0x%llx)\n",
+ 	    SWEET_LOG_BLOCKS * UFS_BLOCK >> 10, base);
+ 	for (;;) {
+ 		(void)tsleep(&sweet_log_chan, PZERO, "sweetlog", hz * (int)sweet_log_secs);
+@@ -772,8 +852,9 @@ sweet_log_thread(__unused void *arg, __unused wait_result_t wr)
+ 			uint64_t need = ((uint64_t)off % UFS_BLOCK + (total - pos) + UFS_BLOCK - 1) / UFS_BLOCK;
+ 			uint32_t n = (uint32_t)MIN(MIN(need, (uint64_t)(SWEET_LOG_SIZE / UFS_BLOCK - blk)),
+ 			    (uint64_t)(BOUNCE_SIZE / UFS_BLOCK));
++			uint64_t dlba = ufs_map(base + 1 + blk, n, &n);
+ 			memcpy(bounce, sweet_log_ring + (uint64_t)blk * UFS_BLOCK, n * UFS_BLOCK);
+-			error = ufs_write_blocks(base + 1 + blk, n);
++			error = ufs_write_blocks(dlba, n);
+ 			pos += (uint64_t)(blk + n) * UFS_BLOCK - off;
+ 		}
+ 		if (!error) {
+@@ -783,7 +864,8 @@ sweet_log_thread(__unused void *arg, __unused wait_result_t wr)
+ 			};
+ 			bzero(bounce, UFS_BLOCK);
+ 			memcpy(bounce, &h, sizeof(h));
+-			error = ufs_write_blocks(base, 1);
++			uint32_t one;
++			error = ufs_write_blocks(ufs_map(base, 1, &one), 1);
+ 		}
+ 		if (!error) {
+ 			error = ufs_sync_cache();
+@@ -804,7 +886,7 @@ sweet_log_start(void)
+ 	thread_t thread;
+ 
+ 	PE_parse_boot_argn("sweetlog", &on, sizeof(on));
+-	if (!on || !su.writable || su.nblocks < 2 * SWEET_LOG_BLOCKS) {
++	if (!on || !su.writable || su.disk_blocks < 2 * SWEET_LOG_BLOCKS) {
+ 		return;
+ 	}
+ 	PE_parse_boot_argn("ufslogsecs", &sweet_log_secs, sizeof(sweet_log_secs));

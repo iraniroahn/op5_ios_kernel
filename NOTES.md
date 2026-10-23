@@ -30,6 +30,11 @@ Phone runs rooted **Pixel Experience 12**: fstab = ext4 + FBE (`fileencryption=i
 `tools/ioscont check /data/ios` (pushed as root) decides whether a root-created
 directory stays plaintext on disk; host-tested on ext4, not yet run on the phone.
 
+**Container check PASSED on the phone:** `ioscont check /data/ios`: ext4, 6 extents,
+64 MiB compared, 0 mismatched, 32233 MiB free. Patch 0084 (container extent map +
+write guard + log inside the container) added; host-tested, applies after 0083, not
+compiled. `mkadt.py --container MAP`, `sweet-log-pull.sh OUT container`.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).
