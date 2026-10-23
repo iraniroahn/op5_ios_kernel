@@ -5,19 +5,24 @@
  *   - SMP: PSCI CPU_ON for the 7 secondaries, each reports its MPIDR
  *   - GICv3 Group 1 IRQ from the virtual timer (INTID 19 on Qualcomm)
  * Any unexpected exception paints a blue panic screen.
+ *
+ * cheeseburger (OnePlus 5, MSM8998): same Kryo layout as topaz (silver
+ * A53 class at MPIDR 0x0-0x3, gold A73 class at 0x100-0x103). Without an
+ * xnu payload the shim runs probe.c on gold and returns to fastboot.
  */
 #include <stdint.h>
 #include "console.h"
 #include "mmu.h"
 #include "loader.h"
+#include "probe.h"
 #include "ufs.h"
 
-#define IMEM_RESTART_REASON	0x0c12565cUL	/* qcom,msm-imem@c125000 restart_reason@65c */
+#define IMEM_RESTART_REASON	0x146bf65cUL	/* qcom,msm-imem@146bf000 restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
-#define PSHOLD			0x0440b000UL
+#define PSHOLD			0x010ac000UL	/* qcom,pshold */
 
-#define GICD_BASE		0x0f200000UL
-#define GICR_BASE		0x0f300000UL
+#define GICD_BASE		0x17a00000UL
+#define GICR_BASE		0x17b00000UL
 #define GICR_SIZE		0x100000UL
 #define GICR_PE_SIZE		0x20000UL
 #define GICR_TYPER		0x08
@@ -59,7 +64,7 @@ static inline void wr8(uintptr_t a, uint8_t v) { *(volatile uint8_t *)a = v; }
 extern char secondary_entry[];
 
 static const char *stage;	/* set at runtime: no absolute pointers in data */
-/* topaz: CPU0-3 (A53) at MPIDR 0x0-0x3, CPU4-7 (A73) at 0x100-0x103 */
+/* topaz and cheeseburger: CPU0-3 (A53 class) at MPIDR 0x0-0x3, CPU4-7 (A73 class) at 0x100-0x103 */
 static inline uint64_t cpu_mpidr(int i) { return (uint64_t)(i >> 2) << 8 | (i & 3); }
 
 static volatile uint64_t sec_mpidr[NR_CPUS];
@@ -241,29 +246,12 @@ static uint64_t speed_ticks(void)
 }
 
 /*
- * Gold cluster to its top cpufreq-hw level before xnu (which has no cpufreq
- * driver): freq-domain1 0xf523000, LUT +0x110 (32-byte rows), PERF_STATE +0x920.
+ * topaz raised the gold cluster through SM6225 cpufreq-hw here. MSM8998
+ * has no such block (its CPU clocks are the OSM), so gold runs at whatever
+ * clock PSCI CPU_ON gives it; the SPEED line shows it.
  */
-static void gold_cpufreq_max(void)
-{
-	uintptr_t b = 0x0f523000;
-	uint32_t best = 0, best_khz = 0, prev = 0;
-	for (uint32_t i = 0; i < 12; i++) {
-		uint32_t v = rd32(b + 0x110 + i * 0x20);
-		uint32_t khz = ((v >> 30) & 3) ? 19200 * (v & 0xff) : 300000;
-		if (i && khz == prev)
-			break;
-		prev = khz;
-		if (khz > best_khz) {
-			best_khz = khz;
-			best = i;
-		}
-	}
-	uint32_t old = rd32(b + 0x920);
-	wr32(b + 0x920, best);
-	__asm__ volatile("dsb sy" ::: "memory");
-	con_hex2("CPUFREQ", "old=", old, "mhz=", best_khz / 1000);
-}
+static volatile int probe_mode;
+static void __attribute__((noreturn)) probe_run(uint64_t dtb);
 
 static void __attribute__((noreturn)) gold_main(uint64_t dtb)
 {
@@ -283,21 +271,44 @@ static void __attribute__((noreturn)) gold_main(uint64_t dtb)
 		 */
 		test_gic();
 		gold_gicr_prepare();
-		gold_cpufreq_max();
 		uint64_t gt = speed_ticks();
 		con_hex2("SPEED", "silver=", (uint32_t)silver_ticks, "gold=", (uint32_t)gt);
 		delay_ms(1000);
 		con_skip();
 		con_str("LOADER", loader_boot(dtb));
+		probe_run(dtb);	/* no payload: probe pages, then fastboot */
 	}
 	for (;;)
 		__asm__ volatile("wfe");
 }
 
+/* Fill this core's probe record; the boot core reads it with the MMU off. */
+static void cpu_rec_fill(int idx)
+{
+	volatile struct cpu_rec *r = &cpu_recs[idx];
+
+	r->midr = rsr("midr_el1");
+	r->mpidr = rsr("mpidr_el1");
+	r->mmfr0 = rsr("id_aa64mmfr0_el1");
+	r->mmfr1 = rsr("id_aa64mmfr1_el1");
+	r->mmfr2 = rsr("s3_0_c0_c7_2");	/* ID_AA64MMFR2_EL1, RAZ on v8.0 */
+	r->isar0 = rsr("id_aa64isar0_el1");
+	r->isar1 = rsr("id_aa64isar1_el1");
+	r->pfr0 = rsr("id_aa64pfr0_el1");
+	r->ticks = speed_ticks();
+	__asm__ volatile("dsb sy" ::: "memory");
+	r->done = 1;
+	__asm__ volatile("dsb sy" ::: "memory");
+}
+
 void secondary_main(uint64_t idx)
 {
-	if (gold_dtb)
+	if (idx == 4 && gold_dtb && !probe_mode)
 		gold_main(gold_dtb);
+	if (probe_mode) {
+		cpu_rec_fill(idx);
+		smc(PSCI_CPU_OFF, 0, 0, 0);
+	}
 	sec_mpidr[idx] = rsr("mpidr_el1") | (1ULL << 63);
 	if (idx == 1) {
 		uintptr_t r = find_gicr();
@@ -513,10 +524,17 @@ void shim_main(uint64_t dtb)
 	uint64_t mmfr0 = rsr("id_aa64mmfr0_el1");
 	con_hex2("MMFR0", "lo=", (uint32_t)mmfr0, "tg16=", (mmfr0 >> 20) & 0xf);
 	con_hex2("MIDR", "el1=", (uint32_t)rsr("midr_el1"), "mpidr=", (uint32_t)rsr("mpidr_el1"));
-	if (((mmfr0 >> 20) & 0xf) == 0) {
-		con_str("SILVER", "no 16K granule: handing off to gold CPU 0x100");
+	/*
+	 * cheeseburger: always continue on gold CPU 0x100, even if this core
+	 * had the 16K granule: the ADT lists only gold and patch 0082 expects
+	 * xnu to start there.
+	 */
+	if ((rsr("mpidr_el1") & 0xffff) != 0x100) {
+		con_str("SILVER", ((mmfr0 >> 20) & 0xf) ? "16K granule here too; handing off to gold CPU 0x100"
+							 : "no 16K granule: handing off to gold CPU 0x100");
 		con_skip();
-		silver_ticks = speed_ticks();
+		cpu_rec_fill(0);
+		silver_ticks = cpu_recs[0].ticks;
 		gold_dtb = dtb;
 		__asm__ volatile("dsb sy" ::: "memory");
 		int64_t r = smc(PSCI_CPU_ON, 0x100, (uintptr_t)secondary_entry, 4);
@@ -581,4 +599,63 @@ void shim_main(uint64_t dtb)
 
 	stage = "done";
 	reset(40);
+}
+
+/*
+ * No payload: probe pages on gold, then back to fastboot. The silver boot
+ * core stays parked; gold starts every other core once so it can report
+ * its own feature registers (cpu_rec_fill), and each core then turns
+ * itself off again with PSCI CPU_OFF.
+ */
+static void __attribute__((noreturn)) probe_run(uint64_t dtb)
+{
+	probe_hold(20);
+
+	stage = "probe cpus";
+	con_clear(RED);
+	con_str("PROBE", "1/4 cores and PSCI (cheeseburger)");
+	con_hex2("PSCI", "ver=", smc(PSCI_VERSION, 0, 0, 0), "smccc=", smc(SMCCC_VERSION, 0, 0, 0));
+	con_hex2("", "migrate=", smc(PSCI_MIGRATE_INFO_TYPE, 0, 0, 0),
+		 "reset2=", smc(PSCI_FEATURES, PSCI_SYSTEM_RESET2, 0, 0));
+	con_skip();
+	probe_mode = 1;
+	__asm__ volatile("dsb sy" ::: "memory");
+	cpu_rec_fill(4);
+	for (int i = 1; i < NR_CPUS; i++)
+		if (i != 4)
+			cpu_on_ret[i] = smc(PSCI_CPU_ON, cpu_mpidr(i), (uintptr_t)secondary_entry, i);
+	for (int t = 0; t < 300; t++) {
+		int pending = 0;
+		for (int i = 1; i < NR_CPUS; i++)
+			pending += cpu_on_ret[i] == 0 && !cpu_recs[i].done;
+		if (!pending)
+			break;
+		delay_ms(10);
+	}
+	probe_cpu_table();
+	probe_hold(45);
+
+	stage = "probe mem";
+	con_clear(RED);
+	con_str("PROBE", "2/4 RAM and carve-outs from the ABL DTB");
+	probe_mem(dtb);
+	probe_hold(45);
+
+	stage = "probe pmic";
+	con_clear(RED);
+	con_str("PROBE", "3/4 PMIC, keys, touch I2C");
+	probe_pmic();
+	probe_keys_live(20);
+	probe_hold(30);
+
+	stage = "ufs";
+	con_clear(RED);
+	con_str("PROBE", "4/4 UFS (read-only)");
+	/* an unclocked UFS register read would hang the bus, not fault */
+	if (rd32(0x00100000 + 0x7500c) >> 31)
+		con_str("UFS", "GCC ufs_ahb clock off: skipped");
+	else
+		test_ufs();
+	probe_hold(60);
+	reset(20);
 }

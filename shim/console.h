@@ -1,9 +1,9 @@
 #pragma once
 #include <stdint.h>
 
-#define FB_BASE		0x5c000000UL	/* reserved-memory cont_splash_region */
+#define FB_BASE		0x9d400000UL	/* cheeseburger: XBL splash, mainline simplefb (cont_splash_mem) */
 #define FB_W		1080
-#define FB_H		2400
+#define FB_H		1920
 #define FB_STRIDE	(FB_W * 4)	/* a8r8g8b8, matches mainline simplefb */
 
 #define RED	0xffff0000U
@@ -20,3 +20,6 @@ void con_str(const char *label, const char *s);
 void con_hex(const char *label, uint64_t v);
 /* label, then "a=xxxxxxxx b=xxxxxxxx" style pairs of 32-bit values */
 void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint32_t vb);
+/* current text row, so a line can be redrawn in place (live probe values) */
+int con_row_get(void);
+void con_row_set(int r);

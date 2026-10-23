@@ -5,7 +5,7 @@
 #include "console.h"
 #include "font.h"
 
-#define SCALE		3
+#define SCALE		2
 #define CH_W		(8 * SCALE)
 #define CH_H		(16 * SCALE)
 #define MARGIN		24
@@ -94,4 +94,14 @@ void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint
 		put_str(col, buf, WHITE);
 	}
 	row++;
+}
+
+int con_row_get(void)
+{
+	return row;
+}
+
+void con_row_set(int r)
+{
+	row = r;
 }

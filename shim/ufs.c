@@ -13,7 +13,7 @@
 #include "console.h"
 #include "ufs.h"
 
-#define UFS_BASE	0x04804000UL	/* ufshc@4804000, topaz live FDT */
+#define UFS_BASE	0x01da4000UL	/* ufshc@1da4000, MSM8998 (UFS 2.1) */
 
 #define REG_CAP		0x00
 #define REG_VER		0x08
