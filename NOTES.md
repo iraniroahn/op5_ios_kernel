@@ -75,6 +75,17 @@ compiled. `mkadt.py --container MAP`, `sweet-log-pull.sh OUT container`.
 - Container check (`ioscont check /data/ios`): OK.
 - Repo pushed to github.com/iraniroahn/op5_ios_kernel (main); CI run 39938581281.
 
+**Keys verified (video IMG_5446):** power -> PON rt 0x01; vol- -> GPIO5 st1 0x81->0x80;
+vol+ -> GPIO6 st1 0x81->0x80 (bit 0 clears while pressed).
+
+**Stage 1 image:** bootimg run 39945595145 (kernel from xnu run 39938581281), artifact
+`cheeseburger-boot` -> shim-boot-xnu.img, cmdline `debug=0xc serial=3 cpus=1 keepsyms=1
+-noprogress rd=ufsroot0 wdt=-1 wdt_test=no_user_checkin sweetlog=0` (UFS read-only, no log
+writes; root on userdata = Android's ext4, so the root mount is expected to fail).
+CI notes: apt on ubuntu-24.04 hung twice until unattended-upgrades was stopped and the
+dpkg lock wait bounded; job logs and artifacts sit on Azure blob hosts this session's
+network policy blocks.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).
