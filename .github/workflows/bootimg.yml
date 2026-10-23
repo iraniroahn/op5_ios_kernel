@@ -18,7 +18,7 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 env:
   # Stage 1 (PORT-OP5.md): one gold core, root on userdata read-only, no log writes.
@@ -86,3 +86,15 @@ jobs:
             shim/out/shim-boot-xnu.img
             shim/out/cmdline.txt
             shim/out/SHA256SUMS
+
+      # Also keep the image on the "builds" branch: git fetches reach it where
+      # artifact downloads (Azure blob storage) are blocked.
+      - name: Publish to builds branch
+        run: |
+          mkdir -p "$RUNNER_TEMP/b" && cd "$RUNNER_TEMP/b"
+          git init -q && git checkout -q -b builds
+          cp "$GITHUB_WORKSPACE"/shim/out/shim-boot-xnu.img "$GITHUB_WORKSPACE"/shim/out/cmdline.txt "$GITHUB_WORKSPACE"/shim/out/SHA256SUMS .
+          printf 'xnu run %s, bootimg run %s, commit %s\n' "${{ inputs.run_id || github.event.workflow_run.id }}" "${{ github.run_id }}" "${{ github.sha }}" > SOURCE.txt
+          git add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -qm "boot image from bootimg run ${{ github.run_id }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" builds
