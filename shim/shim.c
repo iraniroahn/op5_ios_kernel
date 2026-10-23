@@ -292,6 +292,12 @@ static void __attribute__((noreturn)) gold_main(uint64_t dtb)
 		 * and puts its SGIs/PPIs in Group 1; which part matters is still to
 		 * be narrowed down.
 		 */
+		/*
+		 * Gold starts on GPLL0/2 (RCG CFG 0x403, 300 MHz); its own PLL is
+		 * already locked at 614.4 MHz (L 0x20). Third probe: the switch
+		 * works and halves the loop time. No voltage change involved.
+		 */
+		con_hex2("GOLDCLK", "pll=", gold_rcg_select(0x300), "cfg=", rd32(0x17811054));
 		test_gic();
 		gold_gicr_prepare();
 		uint64_t gt = speed_ticks();

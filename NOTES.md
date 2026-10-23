@@ -62,6 +62,13 @@ compiled. `mkadt.py --container MAP`, `sweet-log-pull.sh OUT container`.
   but its cluster RCG (CMD 0x17811050 / CFG 0x17811054, DT qcom,apcs-*-rcgr) still selects
   XO. Power key read OK (pon rt 0x01); volume presses not captured (live view had ended).
   Next image (shim-boot-gold.img) switches the gold RCG to GPLL0 (0x400) then PLL main (0x300).
+- **Gold clock test (fourth run, IMG_5444): RCG gold CFG was 0x403 = GPLL0/2 = 300 MHz, not
+  XO.** Switch to 0x400 (GPLL0, 600 MHz): switch=1, ticks 0xEA640A -> 0x753001 (exactly
+  half); to 0x300 (gold PLL, 614.4 MHz): switch=1, ticks 0x7270E0 (614.4/600). So the slow
+  SPEED numbers were the MMU-off loop (~12 cycles/iteration on gold: its L1 I-cache is not
+  used with the MMU off; silver ~2 cycles), not a 19 MHz clock. gold_main now selects the
+  gold PLL (614.4 MHz) before the loader. Faster needs a higher PLL L value plus the APC1
+  voltage (later). New CI workflow `bootimg` builds shim-boot-xnu.img from an xnu run.
 - That run used the OLD probe image (no page 1b), keys still not pressed on camera.
 - **CI run 39938581281: success** (8 min), artifact xnu-kernel 61 MB. Not downloadable
   from this cloud session: the network policy blocks the Azure blob host GitHub uses.

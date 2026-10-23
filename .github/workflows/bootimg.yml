@@ -1,0 +1,79 @@
+name: bootimg
+
+# Builds the OnePlus 5 boot image around the kernel of a successful xnu run:
+# mainline DTB, ADT (--highmem), SWEETXNU payload, shim boot.img v0.
+# Download the "cheeseburger-boot" artifact and `fastboot boot` it (RAM only).
+on:
+  workflow_run:
+    workflows: [xnu]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: xnu workflow run whose xnu-kernel artifact to use
+        required: true
+      cmdline:
+        description: XNU boot-args
+        default: ""
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  # Stage 1 (PORT-OP5.md): one gold core, root on userdata read-only, no log writes.
+  DEFAULT_CMDLINE: debug=0xc serial=3 cpus=1 keepsyms=1 -noprogress rd=ufsroot0 wdt=-1 wdt_test=no_user_checkin sweetlog=0
+
+jobs:
+  bootimg:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu device-tree-compiler mkbootimg cpio llvm
+          # Ubuntu's mkbootimg imports a GKI module it does not ship (unused for v0)
+          mkdir -p "$RUNNER_TEMP/pystub/gki"
+          touch "$RUNNER_TEMP/pystub/gki/__init__.py"
+          echo 'def generate_gki_certificate(*a, **k): raise SystemExit("no GKI")' > "$RUNNER_TEMP/pystub/gki/generate_gki_certificate.py"
+          echo "PYTHONPATH=$RUNNER_TEMP/pystub" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: xnu-kernel
+          path: xnu/out
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check kernel
+        run: |
+          ls -la xnu/out
+          k=xnu/out/kernel.development.sweet
+          file "$k" || true
+          # ARMv8.0 gold cores: no LSE / RCpc in the kernel (topaz patch 0081)
+          n=$(llvm-objdump -d --mattr=+v8.5a "$k" | grep -cP '\t(cas|casa|casal|casl|ldadd|ldset|ldclr|ldeor|swp|ldapr)\w*\s' || true)
+          echo "v8.1+ atomics / ldapr in the kernel: $n (topaz: only the K256 SHA table)"
+
+      - name: Boot image
+        run: |
+          cmdline="${{ inputs.cmdline }}"
+          [ -n "$cmdline" ] || cmdline="$DEFAULT_CMDLINE"
+          tools/mkdtb-mainline.sh
+          mkdir -p shim/out
+          python3 tools/mkadt.py shim/out/cb.adt --highmem
+          python3 tools/mkpayload.py xnu/out/kernel.development.sweet shim/out/cb.adt shim/out/payload.bin --cmdline "$cmdline"
+          DTB=../dtb/mainline/msm8998-oneplus-cheeseburger.dtb bash shim/build.sh ../shim/out/payload.bin
+          cp shim/out/shim-boot.img shim/out/shim-boot-xnu.img
+          echo "$cmdline" > shim/out/cmdline.txt
+          sha256sum shim/out/shim-boot-xnu.img | tee shim/out/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cheeseburger-boot
+          path: |
+            shim/out/shim-boot-xnu.img
+            shim/out/cmdline.txt
+            shim/out/SHA256SUMS
