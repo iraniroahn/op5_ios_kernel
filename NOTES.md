@@ -52,7 +52,13 @@ compiled. `mkadt.py --container MAP`, `sweet-log-pull.sh OUT container`.
   changes not captured yet. L28 apid 0x092 owner 4 (RPM), **disabled** (touch rail off);
   L6 (ppid 0x45) not in the apid map. GCC BLSP1 AHB and QUP5 clocks off; TLMM 87/88/89/125
   all func 0. Touch needs: RPM vote for L28, clocks, pinmux, QUP I2C, RMI4.
-- UFS page (4/4) not photographed yet.
+- UFS (second run, photos IMG_5432-5436): UFSHCI ver 0x210, cap 0x1587001F (64-bit
+  addressing), ABL leaves HCE=1, HCS=0x10F; TEST UNIT READY / READ CAPACITY / READ all
+  rc 0. LUN0 last LBA 0xD7D7FF (4 KiB), valid GPT (32 entries); userdata at LBA 0x14F40,
+  0xD688 MiB, ext4. The sweet UFS driver should work unchanged.
+- That run used the OLD probe image (no page 1b), keys still not pressed on camera.
+- **CI run 39938581281: success** (8 min), artifact xnu-kernel 61 MB. Not downloadable
+  from this cloud session: the network policy blocks the Azure blob host GitHub uses.
 - Container check (`ioscont check /data/ios`): OK.
 - Repo pushed to github.com/iraniroahn/op5_ios_kernel (main); CI run 39938581281.
 
