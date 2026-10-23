@@ -48,7 +48,7 @@ index 2545cf9..1724396 100644
  		return false;
  	}
 -	cpuName = OSSymbol::withCStringNoCopy("Kryo 470");
-+	cpuName = OSSymbol::withCStringNoCopy("Kryo 260");
++	cpuName = OSSymbol::withCStringNoCopy("Kryo 280");
  	if (cpuName == NULL) {
  		return false;
  	}
