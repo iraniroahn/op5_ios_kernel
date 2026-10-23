@@ -1,0 +1,40 @@
+name: kernel-release
+
+# Publishes the kernel of an xnu run as a release asset (xnu is Apple open
+# source under the APSL; the kernel has no Apple binaries from an IPSW).
+# Release files are reachable where artifact downloads are not.
+on:
+  workflow_run:
+    workflows: [xnu]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: xnu workflow run whose kernel to publish
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: xnu-kernel
+          path: out
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ inputs.run_id || github.event.workflow_run.id }}
+        run: |
+          ls -la out
+          gh release create "kernel-run$RUN" out/kernel.development.sweet out/SHA256SUMS \
+            -R "${{ github.repository }}" --title "XNU kernel from xnu run $RUN" \
+            --notes "kernel.development.sweet (MACHINE_CONFIG SWEET) built by xnu run $RUN."
