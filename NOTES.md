@@ -26,6 +26,10 @@ math; applies after 0082; not compiled yet). `mkadt.py` emits the D20AP identity
 container-file plan in PORT-OP5.md "Keeping Android", waiting for `ro.crypto.type` and the
 /data filesystem type before building the extent remap.
 
+Phone runs rooted **Pixel Experience 12**: fstab = ext4 + FBE (`fileencryption=ice`).
+`tools/ioscont check /data/ios` (pushed as root) decides whether a root-created
+directory stays plaintext on disk; host-tested on ext4, not yet run on the phone.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).

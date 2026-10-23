@@ -100,7 +100,16 @@ Every stage boots with `fastboot boot` from RAM, so `boot`, `system`, `vendor` a
 3. Kernel: the UFS root device (patch 0028 and later) translates root block numbers through that list, so iOS reads and writes only those blocks. Android sees an ordinary file and leaves it alone.
 4. The persistent kernel log (patch 0047) currently writes the last 4 MiB of `userdata`: it must move into the container (or be off with `sweetlog=0`), or it would corrupt Android's filesystem.
 
-Conditions, to check on the phone before any of this is built:
+**This phone (2026-10-23): rooted Pixel Experience 12** (last official OnePlus 5 build). Its `fstab.qcom` (PixelExperience-Devices/device_oneplus_msm8998-common, branch `twelve`) mounts `/data` as **ext4 with file-based encryption** (`fileencryption=ice`); an f2fs line exists only for a /data formatted as f2fs, with optional footer encryption. ext4 + FBE is the workable case. `tools/ioscont` (static aarch64, built by `tools/build-ioscont.sh`) proves it on the phone:
+
+```sh
+adb push shim/out/ioscont /data/local/tmp/
+adb shell su -c 'mkdir -p /data/ios && chmod 700 /data/ios && /data/local/tmp/ioscont check /data/ios'
+```
+
+It writes a 64 MiB pattern file into `/data/ios`, maps its blocks (FIEMAP), reads them raw from `userdata` (read-only) and compares. `RESULT: OK` means the container works there. `ioscont alloc FILE GIB` and `ioscont map FILE` then create the container and print the extent list for the ADT. Tested on the host against a loop-mounted ext4 (OK, 0 mismatches).
+
+Conditions it checks (or that you can check by hand):
 - **Encryption**: `adb shell getprop ro.crypto.type`. `block` (full-disk encryption) rules it out: the blocks on flash are ciphertext and the key lives in TrustZone. `file` (file-based) works if `/data/ios` is created unencrypted (a new top-level directory created by root normally is; the kernel will check for the HFS+ signature and refuse otherwise). `none` is simplest.
 - **Filesystem**: `adb shell mount | grep ' /data '`. ext4 never moves a file's blocks. f2fs does (garbage collection) unless the file is pinned (`F2FS_IOC_SET_PIN_FILE`, as Android does for its own pinned files).
 - About 16 GB free in `/data`. A factory reset or Android's "erase all data" deletes the container.
