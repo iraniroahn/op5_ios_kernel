@@ -23,3 +23,8 @@ void probe_mem(uintptr_t dtb);
 void probe_pmic(void);
 void probe_keys_live(unsigned seconds);
 void probe_hold(unsigned seconds);
+void probe_osm(void);
+int probe_osm_gold_enabled(void);
+uint32_t probe_osm_gold_desired(void);
+void probe_osm_gold_request(uint32_t idx);
+uint32_t probe_osm_gold_mhz(void);

@@ -635,6 +635,33 @@ static void __attribute__((noreturn)) probe_run(uint64_t dtb)
 	probe_cpu_table();
 	probe_hold(45);
 
+	/*
+	 * Gold runs near 19.2 MHz after CPU_ON (first probe). Show the CPU clock
+	 * state; only if the bootloader left the gold OSM enabled (sequencer
+	 * and table loaded) ask it for table entry 0 (300 MHz from GPLL0) and a
+	 * middle entry, then restore its request. Nothing is forced otherwise.
+	 */
+	stage = "probe clocks";
+	con_clear(RED);
+	con_str("PROBE", "1b/4 CPU clocks (gold speed test)");
+	probe_osm();
+	con_skip();
+	con_hex2("SPEED", "gold=", (uint32_t)speed_ticks(), "silver0=", (uint32_t)cpu_recs[0].ticks);
+	if (!probe_osm_gold_enabled()) {
+		con_str("GOLD OSM", "disabled by the bootloader: no request sent");
+	} else {
+		uint32_t old = probe_osm_gold_desired();
+		static const uint32_t try_idx[2] = { 0, 10 };
+		for (int i = 0; i < 2; i++) {
+			probe_osm_gold_request(try_idx[i]);
+			con_hex2("REQUEST", "index=", try_idx[i], "osm_mhz=", probe_osm_gold_mhz());
+			con_hex2("", "ticks=", (uint32_t)speed_ticks(), "desired=", probe_osm_gold_desired());
+		}
+		probe_osm_gold_request(old);
+		con_hex2("RESTORED", "index=", old, "osm_mhz=", probe_osm_gold_mhz());
+	}
+	probe_hold(45);
+
 	stage = "probe mem";
 	con_clear(RED);
 	con_str("PROBE", "2/4 RAM and carve-outs from the ABL DTB");

@@ -394,3 +394,68 @@ void probe_keys_live(unsigned seconds)
 		delay_us(100000);
 	}
 }
+
+/* ---- CPU clocks: OSM (per-cluster DCVS sequencer), cluster PLLs, ACD muxes ---- */
+
+/*
+ * MSM8998 CPU clocks (downstream drivers/clk/msm/clock-osm.c, DT node
+ * qcom,cpu-clock-8998@179c0000): one OSM block per cluster, silver at
+ * 0x179c0000, gold at +0x2000. The Linux driver loads the OSM sequencer,
+ * its frequency/voltage table and enables it; a frequency change is then a
+ * table index written to DCVS_PERF_STATE_DESIRED. Read-only here.
+ */
+#define OSM_CL(c)		(0x179c0000UL + 0x2000UL * (c))
+#define OSM_ENABLE		0x1004
+#define OSM_CYC_CTRL		0x1f00
+#define OSM_CYC_STATUS		0x1f04
+#define OSM_DESIRED		0x1f10
+#define OSM_PSTATE		0x1c00
+
+static const uintptr_t cl_pll[2] = { 0x17916000, 0x17816000 };	/* pwrcl, perfcl */
+static const uintptr_t cl_acd[2] = { 0x17914800, 0x17814800 };
+
+/* Cluster clock in MHz from the OSM cycle counter over 10 ms; 0 if it does not count. */
+static uint32_t osm_mhz(int c)
+{
+	uint32_t a = rd32(OSM_CL(c) + OSM_CYC_STATUS);
+	delay_us(10000);
+	uint32_t b = rd32(OSM_CL(c) + OSM_CYC_STATUS);
+	return (b - a) / 10000;
+}
+
+void probe_osm(void)
+{
+	for (int c = 0; c < 2; c++) {
+		uintptr_t o = OSM_CL(c);
+		con_hex2(c ? "OSM gold" : "OSM silv", "ver=", rd32(o), "en=", rd32(o + OSM_ENABLE));
+		con_hex2("", "desired=", rd32(o + OSM_DESIRED), "pstate=", rd32(o + OSM_PSTATE));
+		uint32_t mhz = osm_mhz(c);
+		con_hex2("", "cycctl=", rd32(o + OSM_CYC_CTRL), "mhz=", mhz);
+		con_hex2(c ? "PLL gold" : "PLL silv", "mode=", rd32(cl_pll[c]), "l=", rd32(cl_pll[c] + 4));
+		con_hex2("", "user=", rd32(cl_pll[c] + 0xc), "status=", rd32(cl_pll[c] + 0x2c));
+		con_hex2(c ? "ACD gold" : "ACD silv", "ver=", rd32(cl_acd[c]), "gfmux=", rd32(cl_acd[c] + 0x3c));
+	}
+}
+
+int probe_osm_gold_enabled(void)
+{
+	return rd32(OSM_CL(1) + OSM_ENABLE) & 1;
+}
+
+uint32_t probe_osm_gold_desired(void)
+{
+	return rd32(OSM_CL(1) + OSM_DESIRED);
+}
+
+/* Ask the gold OSM for table entry idx (it sequences PLL, mux and voltage itself). */
+void probe_osm_gold_request(uint32_t idx)
+{
+	wr32(OSM_CL(1) + OSM_DESIRED, idx);
+	__asm__ volatile("dsb sy" ::: "memory");
+	delay_us(5000);
+}
+
+uint32_t probe_osm_gold_mhz(void)
+{
+	return osm_mhz(1);
+}
