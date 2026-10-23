@@ -29,7 +29,10 @@ screen (image versions v8-v14 in NOTES.md):
 """
 import glob, os, plistlib, shutil, sys
 
-BUILD, VERSION = '20H392', '16.7.16'
+# The firmware the root was built from; IOS_BUILD/IOS_VERSION override (cheeseburger
+# builds the iPhone 8 root in CI from whichever iOS 16.7.x it downloads).
+BUILD = os.environ.get('IOS_BUILD', '20H392')
+VERSION = os.environ.get('IOS_VERSION', '16.7.16')
 MOBILE = 501
 
 
