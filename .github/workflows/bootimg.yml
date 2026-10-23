@@ -28,13 +28,17 @@ jobs:
   bootimg:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Tools
         run: |
+          # man-db index rebuilds after apt can stall ubuntu-24.04 runners for many minutes
+          sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-aarch64-linux-gnu device-tree-compiler mkbootimg cpio llvm
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross device-tree-compiler mkbootimg cpio llvm
           # Ubuntu's mkbootimg imports a GKI module it does not ship (unused for v0)
           mkdir -p "$RUNNER_TEMP/pystub/gki"
           touch "$RUNNER_TEMP/pystub/gki/__init__.py"
