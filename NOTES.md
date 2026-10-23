@@ -19,6 +19,13 @@
 - Probe image built with the mainline Linux DTB (msm-id 292/0x20001,
   board-id 8/0/16859/23). Not yet booted.
 
+**2026-10-23 later:** user chose the **iPhone 8 identity** (D20AP, 750x1334 @2x) and has the
+**6 GB** model. Patch 0083 scales 750x1334 up 1.44x into the panel (host-checked index
+math; applies after 0082; not compiled yet). `mkadt.py` emits the D20AP identity and takes
+`/product` and `/buttons` from `research/ipsw-8/d20ap.adt`. User asked to keep Android:
+container-file plan in PORT-OP5.md "Keeping Android", waiting for `ro.crypto.type` and the
+/data filesystem type before building the extent remap.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).

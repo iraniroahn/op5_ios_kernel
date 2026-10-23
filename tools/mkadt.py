@@ -45,26 +45,31 @@ QEMU_VTIMER_INTID = 27
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'cheeseburger boot manifest').digest()
 
-# The iOS userland is the iPhone X (iPhone10,3 / D22AP) IPSW. MobileGestalt
-# derives product type, device class, home-button-less UI, artwork etc. from
-# the root identity and /product of the real D22AP device tree. That tree is
-# an Apple artifact (kept out of git): extract it from the IPSW with
-#   tools/remotezip.py URL DeviceTree.d22ap.im4p DIR
-#   ipsw img4 im4p extract DIR/Firmware/all_flash/DeviceTree.d22ap.im4p -o d22ap.adt
-D22AP_ADT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../research/ipsw-x/d22ap.adt')
+# cheeseburger presents an iPhone 8 (iPhone10,1 / D20AP): 16:9 like the
+# OnePlus 5 panel, 750x1334 @2x scaled up 1.44x by the kernel (patch 0083),
+# Home-button UI. The userland comes from the iPhone 8 IPSW. MobileGestalt
+# derives product type, device class, artwork etc. from the root identity
+# and /product of the real D20AP device tree. That tree is an Apple artifact
+# (kept out of git): extract it from the IPSW with
+#   tools/remotezip.py URL DeviceTree.d20ap.im4p DIR
+#   ipsw img4 im4p extract DIR/Firmware/all_flash/DeviceTree.d20ap.im4p -o d20ap.adt
+D20AP_ADT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../research/ipsw-8/d20ap.adt')
+LOGICAL_W, LOGICAL_H, DISPLAY_SCALE = 750, 1334, 2
 
 
-def d22ap_product(path=D22AP_ADT):
-    """/product properties of the real D22AP tree, without the syscfg
-    placeholders iBoot would fill in (flag bit set) and the node bookkeeping."""
+def d20ap_node(want, path=D20AP_ADT):
+    """Properties of a top-level node (product, buttons) of the real D20AP
+    tree, without the syscfg placeholders iBoot would fill in (flag bit set)
+    and the node bookkeeping. None if the tree or the node is missing."""
     if not os.path.exists(path):
-        print(f'warning: {path} missing, no /product node', file=sys.stderr)
+        print(f'warning: {path} missing, no /{want} from D20AP', file=sys.stderr)
         return None
     root, _ = adt.parse(open(path, 'rb').read())
     for c in root.children:
-        if dict((k, v) for k, f, v in c.props).get('name') == b'product\0':
+        if dict((k, v) for k, f, v in c.props).get('name') == want.encode() + b'\0':
             return [(k, v) for k, f, v in c.props if not f and k not in ('name', 'AAPL,phandle')]
-    raise SystemExit(f'{path}: no /product node')
+    print(f'warning: {path}: no /{want} node', file=sys.stderr)
+    return None
 
 u32 = lambda *v: struct.pack('<%dI' % len(v), *v)
 u64 = lambda *v: struct.pack('<%dQ' % len(v), *v)
@@ -105,14 +110,14 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False):
         ('crypto-hash-method', cstr('sha2-384')),
         # MobileGestalt's screen class: display-scale (u32, default 0) comes
         # from /chosen, the pixel size from IOMobileFramebuffer. Scale 0 makes
-        # SpringBoard's FBSDisplayMode "infxinf@0x" invalid. 1080x2400 @3x =
-        # 360x800 points (like iPhone X class devices).
-        ('display-scale', u32(3)),
+        # SpringBoard's FBSDisplayMode "infxinf@0x" invalid. iPhone 8:
+        # 750x1334 @2x = 375x667 points (3 with --native: 1080x1920 @3x).
+        ('display-scale', u32(3 if native else DISPLAY_SCALE)),
         # XNU derives IOPlatformUUID (gethostuuid) from these on arm; without
         # them CFPreferences cannot use kCFPreferencesCurrentHost (no ByHost
         # files), so e.g. DataMigration never records LastSystemVersion and
         # migrates on every boot. Synthetic ECID (not the phone's); chip-id
-        # of the A11 that the iPhone X userland expects.
+        # of the A11 that the iPhone 8 userland expects.
         ('unique-chip-id', struct.pack('<Q', SWEET_ECID)),
         ('chip-id', u32(0x8015)),
         # Security status as on a dev-fused, undemoted board (tuple 0,0,1,1):
@@ -183,7 +188,7 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False):
         node('wdt', [ph(), ('no-pmu', u32(1))]),
         # Main display: IOMobileFramebuffer.framework counts /arm-io children
         # with this device_type and reads the canvas size from the node
-        # (the presented iPhone X size, see SweetFramebuffer.cpp);
+        # (the presented iPhone 8 size, see SweetFramebuffer.cpp);
         # the kernel's AppleCLCD matches the compatible string.
         # No "wlan" node: launchd only starts wifid with one, and there is no
         # Wi-Fi driver for the WCN3990 yet (topaz's lives in patches-topaz/).
@@ -192,10 +197,9 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False):
             ('device_type', cstr('display-subsystem')),
             ('compatible', cstr('sweet,display')),
             # --native: present the real 1080x1920 panel. Without it iOS draws the
-            # 1125x2436 iPhone X canvas and only its centre 1080x1920 is shown
-            # (status bar and home indicator are cut off; see PORT-OP5.md).
-            ('canvas-width', u32(FB_W if native else 1125)),
-            ('canvas-height', u32(FB_H if native else 2436)),
+            # 750x1334 iPhone 8 canvas, scaled up to the whole panel (patch 0083).
+            ('canvas-width', u32(FB_W if native else LOGICAL_W)),
+            ('canvas-height', u32(FB_H if native else LOGICAL_H)),
         ])])
 
     fbcon = node('sweet-fbcon', [
@@ -220,32 +224,33 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False):
     defaults = node('defaults', [ph(), ('no-effaceable-storage', u32(1))])
 
     # MobileGestalt HomeButtonType = IODeviceTree:/buttons home-button-type
-    # (D22AP: 2, no Home button; absent = 0 = Home-button device).
-    buttons = node('buttons', [
-        ph(),
-        ('button-names', cstr('volup') + cstr('voldown') + cstr('hold')),
-        ('home-button-type', u32(2)),
+    # (D22AP: 2, no Home button; absent = 0 = Home-button device). Take the
+    # real D20AP /buttons; the fallback leaves home-button-type out, which
+    # also means a Home-button device.
+    buttons_props = d20ap_node('buttons') or [
+        ('button-names', cstr('volup') + cstr('voldown') + cstr('hold') + cstr('menu')),
         ('opposed-power-vol-buttons', u32(1)),
-    ])
+    ]
+    buttons = node('buttons', [ph()] + buttons_props)
 
-    product_props = d22ap_product()
-    # Our framebuffer is sRGB 8-bit. With the iPhone X's 'P3' MobileGestalt says
+    product_props = d20ap_node('product')
+    # Our framebuffer is sRGB 8-bit. With the iPhone 8's 'P3' MobileGestalt says
     # HasExtendedColorDisplay and WebKit renders page tiles into 10-bit surfaces
     # ('w30r', 'b3a8') that this kernel does not provide: Safari pages stay blank.
     if product_props:
         product_props = [(k, cstr('sRGB') if k == 'artwork-display-gamut' else v) for k, v in product_props]
     product = [node('product', [ph()] + product_props)] if product_props else []
 
-    # Identity of the iPhone X whose userland runs here: compatible[0] is
-    # hw.model/hw.target (D22AP), model is hw.machine/hw.product
-    # (iPhone10,3). 'xiaomi,sweet' and qcom,kryo470 stay because the
+    # Identity of the iPhone 8 whose userland runs here: compatible[0] is
+    # hw.model/hw.target (D20AP), model is hw.machine/hw.product
+    # (iPhone10,1). 'xiaomi,sweet' and qcom,kryo470 stay because the
     # SweetPlatformExpert and CPU IONameMatch still use them.
     return node('device-tree', [
         ph(),
-        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('oneplus,cheeseburger') + cstr('xiaomi,sweet') + cstr('qcom,msm8998') + cstr('AppleARM')),
-        ('model', cstr('iPhone10,3')),
-        ('target-type', cstr('D22')),
-        ('target-sub-type', cstr('D22AP')),
+        ('compatible', cstr('D20AP') + cstr('iPhone10,1') + cstr('oneplus,cheeseburger') + cstr('xiaomi,sweet') + cstr('qcom,msm8998') + cstr('AppleARM')),
+        ('model', cstr('iPhone10,1')),
+        ('target-type', cstr('D20')),
+        ('target-sub-type', cstr('D20AP')),
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),

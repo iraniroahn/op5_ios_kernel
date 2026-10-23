@@ -1,12 +1,12 @@
 # ios-cheeseburger
 
-**Porting Apple's iOS 16 (XNU kernel + iPhone X userland) to the OnePlus 5 (A5000, `cheeseburger`, Snapdragon 835 / MSM8998).**
+**Porting Apple's iOS 16 (XNU kernel + iPhone 8 userland) to the OnePlus 5 (A5000, `cheeseburger`, Snapdragon 835 / MSM8998).**
 
-This is a fork of [MakrSas/ios-topaz](https://github.com/MakrSas/ios-topaz) (iOS 16 on the Redmi Note 12 4G), which is itself a port of [dipa-studio/ios-sweet](https://github.com/dipa-studio/ios-sweet). Topaz is the right parent: its Snapdragon 685 has the same CPU pairing as the OnePlus 5's Snapdragon 835 (Cortex-A73 class "Gold" cores that have the 16K page granule XNU needs, Cortex-A53 class "Silver" cores that do not, all ARMv8.0), and topaz already solved booting XNU on the Gold cores and running the iPhone X userland on ARMv8.0.
+This is a fork of [MakrSas/ios-topaz](https://github.com/MakrSas/ios-topaz) (iOS 16 on the Redmi Note 12 4G), which is itself a port of [dipa-studio/ios-sweet](https://github.com/dipa-studio/ios-sweet). Topaz is the right parent: its Snapdragon 685 has the same CPU pairing as the OnePlus 5's Snapdragon 835 (Cortex-A73 class "Gold" cores that have the 16K page granule XNU needs, Cortex-A53 class "Silver" cores that do not, all ARMv8.0), and topaz already solved booting XNU on the Gold cores and running the iOS 16 userland on ARMv8.0. Unlike topaz, this port presents an **iPhone 8** (750x1334, 16:9 like the OnePlus 5 panel) scaled up to the full screen, so nothing is cut off.
 
 > **Status (2026-10-23): not booted yet.** The stage 0 hardware probe is ready to run (nothing is flashed). Kernel, ADT and boot image are retargeted to the OnePlus 5 but untested on a phone. No touch, key, Wi-Fi or GPU driver exists for this board yet. See [PORT-OP5.md](PORT-OP5.md) for the hardware map, the plan and the driver work list.
 
-> Experimental. When you later flash the iOS root it goes into `userdata` and **erases Android's user data**. Back up `persist`, `modemst1`, `modemst2`, `fsg`, `fsc` and `boot` first: they hold calibration data that cannot be downloaded anywhere.
+> Experimental. The planned way to install the iOS root without erasing Android is a container file in `userdata` (see "Keeping Android" in PORT-OP5.md); flashing it over `userdata` instead **erases Android's user data**. Back up `persist`, `modemst1`, `modemst2`, `fsg`, `fsc` and `boot` first: they hold calibration data that cannot be downloaded anywhere.
 
 ## Stage 0: run the probe (safe, RAM only)
 
@@ -50,7 +50,7 @@ The XNU kernel builds on GitHub's macOS runners exactly as for topaz (`gh workfl
 | --- | --- |
 | `PORT-OP5.md` | Hardware map, what changed from topaz, stages, driver work list, open questions |
 | `shim/` | Boot shim (boot.img v0, `Image.gz` + appended DTB) and the probe (`probe.c`) |
-| `xnu/patches/` | Kernel patches 0001-0082 applied by CI |
+| `xnu/patches/` | Kernel patches 0001-0083 applied by CI (0083: iPhone 8 display scaling) |
 | `xnu/patches-topaz/` | Topaz patches 0083+ (SM6225 drivers, GPU, Wi-Fi, audio), not built |
 | `tools/mkadt.py` | Apple Device Tree for the OnePlus 5 |
 | `tools/unpack_bootv0.py` | Splits a stock OnePlus 5 `boot.img` into kernel, ramdisk and DTBs |

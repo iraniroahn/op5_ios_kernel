@@ -1,0 +1,171 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index a62416c..d3c06ef 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -69,17 +69,18 @@ enum {
+ #define SWEET_FB_NOTIFY_TYPES           8
+ #define SWEET_FB_NOTIFY_VSYNC           5
+ #define SWEET_FB_VSYNC_US               16667
+-#define SWEET_FB_DOT_PITCH              458     /* ppi, as the iPhone X panel */
++#define SWEET_FB_DOT_PITCH              326     /* ppi, as the iPhone 8 panel */
+ /*
+  * The iOS userland only has status bar / layout data for real iPhone
+  * screens (UIKit: "No status bar visual provider for screen", the red
+- * rdar://45025538 bar for 360x800 points). The display is therefore
+- * presented as the iPhone X panel, 1125x2436 (375x812 points @3x), and the
+- * centered 1080x2400 part of it is shown on the 1080x2400 panel.
++ * rdar://45025538 bar for 360x800 points). cheeseburger: the 16:9
++ * 1080x1920 panel is presented as the iPhone 8 panel, 750x1334 (375x667
++ * points @2x), and every frame is scaled up 1.44x (nearest neighbour)
++ * into the panel, so nothing is cut off.
+  * Boot-arg sweetfb_native=1 presents the real panel size instead.
+  */
+-#define SWEET_FB_LOGICAL_W              1125
+-#define SWEET_FB_LOGICAL_H              2436
++#define SWEET_FB_LOGICAL_W              750
++#define SWEET_FB_LOGICAL_H              1334
+ #define SWEET_FB_FORMAT_BGRA            0x42475241
+ 
+ class IOMobileFramebuffer : public IOService {
+@@ -104,6 +105,8 @@ public:
+ 	uint32_t      fWidth, fHeight, fRowBytes;
+ 	uint32_t      fLogicalW, fLogicalH;     /* size reported to userland */
+ 	int32_t       fOffX, fOffY;             /* logical origin of the panel */
++	bool          fScaled;                  /* logical < panel: scale up in present() */
++	uint32_t     *fXMap;                    /* panel column -> logical column */
+ 	uintptr_t     fPixels;          /* kernel mapping of the panel memory */
+ 	IOMemoryMap  *fMap;
+ 	SweetSurface *fSurface;         /* the panel memory as an IOSurface */
+@@ -122,6 +125,8 @@ public:
+ 	void removeClient(IOMobileFramebufferUserClient *client);
+ 	void swap(const uint8_t *rec);
+ 	void present(const uint8_t *rec);
++	void presentScaled(SweetSurface *s, uintptr_t src, uint32_t bpe, int32_t sx, int32_t sy,
++	    int32_t dx, int32_t dy, int32_t w, int32_t h);
+ };
+ 
+ OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);
+@@ -170,12 +175,22 @@ AppleCLCD::start(IOService *provider)
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+ 	fLogicalW = fWidth;
+ 	fLogicalH = fHeight;
+-	if (!native && fWidth <= SWEET_FB_LOGICAL_W && fHeight <= SWEET_FB_LOGICAL_H) {
++	if (!native) {
+ 		fLogicalW = SWEET_FB_LOGICAL_W;
+ 		fLogicalH = SWEET_FB_LOGICAL_H;
+ 	}
+-	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
+-	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
++	fScaled = fLogicalW < fWidth && fLogicalH < fHeight;
++	fOffX = fScaled ? 0 : (int32_t)(fLogicalW - fWidth) / 2;
++	fOffY = fScaled ? 0 : (int32_t)(fLogicalH - fHeight) / 2;
++	if (fScaled) {
++		fXMap = (uint32_t *)IOMallocData(fWidth * sizeof(uint32_t));
++		if (fXMap == NULL) {
++			return false;
++		}
++		for (uint32_t x = 0; x < fWidth; x++) {
++			fXMap[x] = (uint32_t)((uint64_t)x * fLogicalW / fWidth);
++		}
++	}
+ 	fLock = IOLockAlloc();
+ 	fClients = OSArray::withCapacity(4);
+ 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
+@@ -353,6 +368,11 @@ AppleCLCD::present(const uint8_t *rec)
+ 			w = (int32_t)s->width;
+ 			h = (int32_t)s->height;
+ 		}
++		if (fScaled) {
++			presentScaled(s, src, bpe, sx, sy, dx, dy, w, h);
++			s->release();
++			continue;
++		}
+ 		if (sx < 0 || sy < 0) {
+ 			sx = sy = 0;
+ 		}
+@@ -401,6 +421,61 @@ AppleCLCD::present(const uint8_t *rec)
+ 	}
+ }
+ 
++/*
++ * One layer, logical rect (dx,dy,w,h) <- surface (sx,sy), scaled up to the
++ * panel. Each panel row picks its logical row; a row that repeats the one
++ * above it (1.44x: every other row or so) is a memcpy of the previous one.
++ */
++void
++AppleCLCD::presentScaled(SweetSurface *s, uintptr_t src, uint32_t bpe, int32_t sx, int32_t sy,
++    int32_t dx, int32_t dy, int32_t w, int32_t h)
++{
++	if (src == 0 || bpe != 4 || s->elementWidth != 1 || s->elementHeight != 1 || s->memory == NULL ||
++	    sx < 0 || sy < 0 || dx < 0 || dy < 0) {
++		return;
++	}
++	if (w > (int32_t)s->width - sx) {
++		w = (int32_t)s->width - sx;
++	}
++	if (h > (int32_t)s->height - sy) {
++		h = (int32_t)s->height - sy;
++	}
++	if (w > (int32_t)fLogicalW - dx) {
++		w = (int32_t)fLogicalW - dx;
++	}
++	if (h > (int32_t)fLogicalH - dy) {
++		h = (int32_t)fLogicalH - dy;
++	}
++	if (w <= 0 || h <= 0 ||
++	    (uint64_t)s->offset + (uint64_t)(sy + h - 1) * s->bytesPerRow + (uint64_t)(sx + w) * 4 >
++	    s->memory->getLength()) {
++		return;
++	}
++	/* panel columns/rows covered by the logical rect */
++	uint32_t px0 = (uint32_t)(((uint64_t)dx * fWidth + fLogicalW - 1) / fLogicalW);
++	uint32_t px1 = (uint32_t)(((uint64_t)(dx + w) * fWidth + fLogicalW - 1) / fLogicalW);
++	uint32_t py0 = (uint32_t)(((uint64_t)dy * fHeight + fLogicalH - 1) / fLogicalH);
++	uint32_t py1 = (uint32_t)(((uint64_t)(dy + h) * fHeight + fLogicalH - 1) / fLogicalH);
++	px1 = px1 > fWidth ? fWidth : px1;
++	py1 = py1 > fHeight ? fHeight : py1;
++	const uint8_t *base = (const uint8_t *)(src + s->offset);
++	int32_t prev = -1;
++	for (uint32_t py = py0; py < py1; py++) {
++		int32_t ly = (int32_t)((uint64_t)py * fLogicalH / fHeight);
++		uint32_t *out = (uint32_t *)(fPixels + (uint64_t)py * fRowBytes);
++		if (ly == prev) {
++			memcpy(out + px0, (const uint32_t *)(fPixels + (uint64_t)(py - 1) * fRowBytes) + px0,
++			    (size_t)(px1 - px0) * 4);
++			continue;
++		}
++		prev = ly;
++		const uint32_t *in = (const uint32_t *)(base + (uint64_t)(sy + ly - dy) * s->bytesPerRow) + sx - dx;
++		for (uint32_t px = px0; px < px1; px++) {
++			out[px] = in[fXMap[px]];
++		}
++	}
++}
++
+ bool
+ IOMobileFramebufferUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
+ {
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 27bc49d..b20d68c 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -434,10 +434,15 @@ SweetHIDTouch::start(IOService *provider)
+ 	}
+ 	int native = 0;
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+-	fLogicalW = native ? 1080 : 1125;
+-	fLogicalH = native ? 2400 : 2436;
+-	fOffX = (fLogicalW - 1080) / 2;
+-	fOffY = (fLogicalH - 2400) / 2;
++	/*
++	 * cheeseburger: the 1080x1920 panel shows the whole presented display
++	 * (scaled, or native), so panel pixels normalise directly.
++	 */
++	(void)native;
++	fLogicalW = 1080;
++	fLogicalH = 1920;
++	fOffX = 0;
++	fOffY = 0;
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+ 	setProperty("DisplayIntegrated", kOSBooleanTrue);
+ 	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */

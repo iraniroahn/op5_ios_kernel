@@ -9,7 +9,7 @@ Probably, with real driver work. The deciding facts:
 - **Storage is UFS 2.1**, like sweet, whose UFS driver this tree carries.
 - **The bootloader can `fastboot boot`** a v0 boot image and leaves the panel lit (mainline Linux uses its framebuffer as simplefb).
 - **Board drivers are new work:** the touch controller sits on an older I2C block (BLSP QUP, not GENI), its power rails are owned by RPM (not RPMh), and the PMIC arbiter is v3 (not v5). None of sweet's or topaz's input drivers apply as is.
-- **The panel is 16:9 (1080x1920)**, the iPhone X canvas is 1125x2436. Showing iOS properly needs a different identity or scaling (see "Display").
+- **The panel is 16:9 (1080x1920)**, so this port presents an **iPhone 8** (750x1334, also 16:9) and scales it up 1.44x to the full panel (see "Display").
 
 ## Hardware map
 
@@ -19,7 +19,7 @@ Sources: mainline `msm8998.dtsi` and `msm8998-oneplus-common.dtsi`, the OnePlus 
 | --- | --- | --- |
 | Boot image | v0, `Image.gz` + appended DTB, base 0, page 4096 | v4, payload behind `_end` |
 | CPU | Kryo 280: Silver `0x0`-`0x3`, Gold `0x100`-`0x103`; 16K on Gold only (*probe*) | Kryo 260, same layout |
-| RAM | 6 or 8 GB from `0x80000000`; carve-outs all below 4 GB; XNU gets `0x1_00000000` + `0xfcc00000` (*probe*) | `0x1_40000000` + 4 GB |
+| RAM | 6 GB (this phone) or 8 GB from `0x80000000`; carve-outs all below 4 GB; XNU gets `0x1_00000000` + `0xfcc00000`, inside the 6 GB model's 4 GB upper bank (*probe*) | `0x1_40000000` + 4 GB |
 | Framebuffer | `0x9d400000`, 1080x1920, a8r8g8b8, stride 4320; Samsung S6E3FA5 **command-mode** panel (*probe*) | `0x5c000000`, 1080x2400 video mode |
 | GIC v3 | GICD `0x17a00000`, GICR `0x17b00000` (8 x `0x20000`) | `0xf200000` / `0xf300000` |
 | Timer | 19.2 MHz, virtual timer PPI 3 = INTID 19 | same |
@@ -54,7 +54,7 @@ Each stage is a `fastboot boot` from RAM until stage 2 flashes `userdata`.
    `python3 tools/mkadt.py shim/out/cb.adt --highmem` and
    `python3 tools/mkpayload.py xnu/out/kernel.development.sweet shim/out/cb.adt shim/out/payload.bin --cmdline 'debug=0xc serial=3 cpus=1 keepsyms=1 -noprogress rd=ufsroot0 wdt=-1 wdt_test=no_user_checkin'`, then `shim/build.sh shim/out/payload.bin`.
    Success: early markers at the bottom of the screen, kernel text scrolling, the UFS driver finding `userdata`, then a panic about the missing root. Read-only: no `ufsrw=1`. If ABL drops the v0 ramdisk ("no initrd" on screen), rebuild with `EMBED=1`.
-2. **iOS root and GUI, no input.** Root image from the iPhone X IPSW as in [README-topaz.md](README-topaz.md), `fastboot flash userdata` (destructive: confirm first), boot with `ufsrw=1 rootrw=1 launchd_unsecure_cache=1 sweetfb_noconsole=1 sweetfb_hz=30`, then `cpus=4`. Expect the lock screen after several minutes, cropped (see Display).
+2. **iOS root and GUI, no input.** Root image from the **iPhone 8** (iPhone10,1, D20AP) IPSW of the same iOS 16.7 build, made as in [README-topaz.md](README-topaz.md) (use the D20AP Erase identity in BuildManifest.plist, and put `DeviceTree.d20ap.im4p`, extracted, at `research/ipsw-8/d20ap.adt` for `mkadt.py`). Either flash `userdata` (destructive: confirm first) or keep Android with the container file (see "Keeping Android"). Boot with `ufsrw=1 rootrw=1 launchd_unsecure_cache=1 sweetfb_noconsole=1 sweetfb_hz=30`, then `cpus=4`. Expect the lock screen after several minutes.
 3. **Keys.** Small: see below.
 4. **Touch.** Large: see below.
 5. **Display identity / scaling.**
@@ -81,13 +81,31 @@ The probe's `spmi_rd()` already implements the v3 read; page 3's live key view c
 5. **Synaptics RMI4**: page select register `0xff`, PDT scan from `0xe9` down, F01 (device control), F12 (2D, 10 fingers): `drivers/input/rmi4/rmi_f12.c`. OnePlus's `synaptics_driver_s3320.c` shows the register pages it uses. The capacitive Back/Recents keys come from the same chip (F1A) and can serve as a Home button.
 6. **HID side**: reuse sweet's `SweetHID` digitizer service. Its panel mapping hard-codes 2400 rows (`SweetHID.cpp`, `fOffY = (fLogicalH - 2400) / 2`): use the panel height instead.
 
-### Display
+### Display (decided: iPhone 8)
 
-The iPhone X canvas (1125x2436) centred on a 1080x1920 panel loses 258 rows at the top and the bottom: the status bar and the home indicator are off screen. Options, best first:
+The device tree (`tools/mkadt.py`) presents an **iPhone 8** (`iPhone10,1`, D20AP, 750x1334 at 2x = 375x667 points, Home-button UI). Kernel patch 0083 makes AppleCLCD report 750x1334 and scale each frame up 1.44x (nearest neighbour) into the 1080x1920 panel, so nothing is cut off; touch is normalised to the panel and needs no scaling. Checked on the host: the full-screen layer covers every panel pixel, and partial layers never read outside their rectangle. Not yet compiled (CI) or run.
 
-- **iPhone 8 Plus identity** (`iPhone10,2` / D211AP, 1242x2208 at 3x, Home button UI). Its real panel is exactly 1080x1920; iOS renders 1242x2208 and the display pipe scales it down by 0.87, which the panel copy would do on the CPU. Needs the iPhone 8 Plus IPSW and device tree (`/product`, `home-button-type` 0) and a Home key (Synaptics capacitive key, or the fingerprint button later). This also sidesteps sweet's "cannot leave an app" gesture problem.
-- `--native`: present 1080x1920 at 3x (360x640 points) under the iPhone X identity; SpringBoard may or may not lay this out sensibly.
-- Keep the iPhone X canvas and scale it down to fit (aspect ratio does not match: black bars).
+Rendering 750x1334 is about 2.7x fewer pixels than the iPhone X canvas, which helps the CPU-only renderer.
+
+**Home button.** iPhone 8 mode has no swipe-up gesture: leaving an app needs a Home press (`kHIDUsage_Csmr_Menu`, already in sweet's HID layer as `sweet_hid_key(3, ...)`). Plan: when the keys driver is ported, both volume keys pressed together send Home; once touch works, the Synaptics capacitive key next to the fingerprint button does. The fingerprint button itself is read by TrustZone and is out of reach for now.
+
+`sweetfb_native=1` with `mkadt.py --native` presents the raw 1080x1920 panel at 3x instead (no scaling, layout untested).
+
+## Keeping Android (no erase)
+
+Every stage boots with `fastboot boot` from RAM, so `boot`, `system`, `vendor` and the bootloaders are never written: Android keeps booting normally when you just power on. Only the iOS root needed space, and the default plan put it over `userdata`. The alternative is a **container file inside `userdata`**:
+
+1. With root (Magisk) or TWRP: `mkdir /data/ios && fallocate -l 16G /data/ios/root.img`, then write the HFS+ root into it through the filesystem (`dd ... of=/data/ios/root.img conv=notrunc`), so its blocks are allocated and written.
+2. Read its block list (`filefrag -v` / FIEMAP) and the `userdata` start from the GPT; `tools/mkadt.py` puts the extent list into the ADT.
+3. Kernel: the UFS root device (patch 0028 and later) translates root block numbers through that list, so iOS reads and writes only those blocks. Android sees an ordinary file and leaves it alone.
+4. The persistent kernel log (patch 0047) currently writes the last 4 MiB of `userdata`: it must move into the container (or be off with `sweetlog=0`), or it would corrupt Android's filesystem.
+
+Conditions, to check on the phone before any of this is built:
+- **Encryption**: `adb shell getprop ro.crypto.type`. `block` (full-disk encryption) rules it out: the blocks on flash are ciphertext and the key lives in TrustZone. `file` (file-based) works if `/data/ios` is created unencrypted (a new top-level directory created by root normally is; the kernel will check for the HFS+ signature and refuse otherwise). `none` is simplest.
+- **Filesystem**: `adb shell mount | grep ' /data '`. ext4 never moves a file's blocks. f2fs does (garbage collection) unless the file is pinned (`F2FS_IOC_SET_PIN_FILE`, as Android does for its own pinned files).
+- About 16 GB free in `/data`. A factory reset or Android's "erase all data" deletes the container.
+
+Other ways, not recommended: shrinking `userdata` (f2fs cannot shrink, and full-disk encryption keeps a footer at the end), or a USB stick over OTG (needs a USB host driver first; topaz-woa has one to port later).
 
 ## Open questions the probe answers
 
