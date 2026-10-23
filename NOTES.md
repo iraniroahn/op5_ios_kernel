@@ -96,6 +96,16 @@ cheeseburger-shim; SWEET AMFI/Sandbox/HFS/AKS/WDT/SURF/HID registered; `SWEET FB
 (Android ext4, as expected) and `mount(N) failed` retried every few seconds (user stopped it
 after ~6 min). The stack sampler ran (`SMP --- sample 2`). No panic.
 
+**Root image built in the cloud (private repo iraniroahn/op5_ios_root, workflow `root`,
+run 40037260289, release root-20H392-run40037260289):** iPhone10,1 iOS 16.7.16 (20H392)
+from iPhone_4.7_P3_16.7.16_20H392_Restore.ipsw; 16 GiB HFS+ + 8 MiB log space
+(17188257792 bytes, sha256 46f8f7fb...702d7), gzip parts 1.99+1.99+1.61 GB; d20ap.adt
+(home-button-type 1, artwork-device-subtype 0x239, scale 2) at research/ipsw-8/ (not in
+git). The user's Mac streams it with push-to-phone.sh into /data/ios/root.img and returns
+root.map. Release assets download through the REST API here (artifacts do not):
+workflow `kernel-release` publishes each xnu kernel (kernel-run39938581281, 17.6 MB,
+0 v8.1+ atomics/ldapr by llvm-objdump).
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).
