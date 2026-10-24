@@ -124,6 +124,10 @@ poster default). Input not ported yet: cannot unlock.
 Next: keys driver for SPMI v3 (power, volume, Home = both volume keys), then touch (RPM L28,
 QUP5 I2C, Synaptics RMI4), RTC, faster gold clock.
 
+**Keys driver (0085, xnu run 40047788397, kernel-run40047788397):** PM8998 over SPMI v3,
+power/vol-/vol+ and Home = both volume keys; starts by default. Images
+shim/out/ios-keys-cpus4.img (6c47cc1e...) and -cpus1.img (16ee9e42...), same boot-args as stage 2.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).
