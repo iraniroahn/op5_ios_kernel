@@ -115,6 +115,15 @@ unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 ro
 launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30`. Log: tools/sweet-log-pull.sh
 OUT container.
 
+**🎉 STAGE 2: iOS 16.7.16 LOCK SCREEN on the OnePlus 5 (2026-10-24, photo):** booted
+ios-stage2-*.img from /data/ios/root.img (container, Android untouched): Apple logo, then the
+iPhone 8 lock screen filling the 1080x1920 panel (750x1334 scaled 1.44x): status bar "iPhone"
+(no baseband), charging battery icon, clock 4:17, "Wednesday, December 31" (no RTC), black
+background (no wallpaper provider, as on topaz); clock text pink/red (to check: colour or
+poster default). Input not ported yet: cannot unlock.
+Next: keys driver for SPMI v3 (power, volume, Home = both volume keys), then touch (RPM L28,
+QUP5 I2C, Synaptics RMI4), RTC, faster gold clock.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).
