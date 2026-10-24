@@ -106,6 +106,15 @@ root.map. Release assets download through the REST API here (artifacts do not):
 workflow `kernel-release` publishes each xnu kernel (kernel-run39938581281, 17.6 MB,
 0 v8.1+ atomics/ldapr by llvm-objdump).
 
+**Stage 2 images (2026-10-24):** push-to-phone.sh done on the phone (sha256 OK, root.map
+276 extents, 0x400800000 bytes, research/root.map). Kernel kernel-run40045357475 (0084 with
+the HFS+ block-0 check before writes). ADT: --highmem --container root.map + D20AP /product,
+/buttons. Images shim/out/ios-stage2-cpus4.img (sha256 b2b2a2ad...) and -cpus1.img
+(91e44043...), boot-args `cpus=N debug=0xc serial=3 keepsyms=1 -noprogress rd=ufsroot0
+unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1
+launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30`. Log: tools/sweet-log-pull.sh
+OUT container.
+
 **Next:** user boots `shim/out/shim-boot.img` with `fastboot boot` and sends
 photos of the four probe pages. Then: confirm Gold TGran16 and the RAM
 range, CI kernel build, stage 1 (XNU to the root mount, read-only).
