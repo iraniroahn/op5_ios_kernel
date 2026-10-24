@@ -463,3 +463,634 @@ uint32_t probe_osm_gold_mhz(void)
 {
 	return osm_mhz(1);
 }
+
+/* ---- touch: RPM rail vote, BLSP1 QUP5 I2C, Synaptics RMI4 (S3320 @0x20) ---- */
+
+/*
+ * Everything the touch IC needs that ABL leaves off, done the way mainline
+ * Linux does it (drivers/rpmsg/qcom_glink_{rpm,native}.c, soc/qcom/smd-rpm.c,
+ * regulator/qcom_smd-regulator.c, clk/qcom/gcc-msm8998.c, i2c/busses/
+ * i2c-qup.c, input/rmi4). Writes: RPM message RAM FIFOs and the APCS IPC
+ * doorbell, GCC BLSP1 AHB vote and QUP5 I2C branch, TLMM 87/88/89/125, QUP5.
+ */
+#define RPM_MSGRAM	0x00778000UL	/* qcom,rpm-msg-ram */
+#define RPM_MSGRAM_SZ	0x7000
+#define APCS_IPC	0x17911008UL	/* msm8998 apcs-hmss-global: offset 8, bit 0 = RPM */
+
+struct gpipe {
+	uintptr_t tail, head, fifo;
+	uint32_t len;
+};
+static struct gpipe grx, gtx;
+static uint8_t gdata[64];	/* last TX_DATA payload from the RPM */
+static uint32_t gdata_len, g_rcid, g_lcid_ack, g_vack, g_ropen;
+static char glog[40];		/* received command numbers, as hex digits */
+static int glog_n;
+
+static int glink_toc(char *b)
+{
+	uintptr_t toc = RPM_MSGRAM + RPM_MSGRAM_SZ - 256;
+	char *p = b;
+	if (rd32(toc) != 0x67727430) {	/* "grt0" */
+		kv(p, "bad magic ", rd32(toc), 8);
+		return -1;
+	}
+	uint32_t n = rd32(toc + 4);
+	if (n > 20)
+		return -1;
+	for (uint32_t i = 0; i < n; i++) {
+		uint32_t id = rd32(toc + 8 + 12 * i), off = rd32(toc + 12 + 12 * i), sz = rd32(toc + 16 + 12 * i);
+		if (off + sz > RPM_MSGRAM_SZ)
+			continue;
+		struct gpipe *g = id == 0x72326170 ? &grx : id == 0x61703272 ? &gtx : 0;	/* r2ap, ap2r */
+		if (!g)
+			continue;
+		g->tail = RPM_MSGRAM + off;
+		g->head = RPM_MSGRAM + off + 4;
+		g->fifo = RPM_MSGRAM + off + 8;
+		g->len = sz;
+	}
+	p = kv(p, "n=", n, 1);
+	p = kv(p, "rx=", grx.tail - RPM_MSGRAM, 4);
+	p = kv(p, "/", grx.len, 4);
+	p = kv(p, "tx=", gtx.tail - RPM_MSGRAM, 4);
+	kv(p, "/", gtx.len, 4);
+	return grx.len && gtx.len ? 0 : -1;
+}
+
+static uint32_t g_wrap(uint32_t v, uint32_t len)
+{
+	return v >= len ? v - len : v;
+}
+
+/* nwords 32-bit words (a multiple of 2: GLINK pads to 8 bytes), then kick. */
+static int glink_tx(const uint32_t *w, unsigned nwords)
+{
+	uint32_t head = rd32(gtx.head), tail = rd32(gtx.tail);
+	uint32_t avail = tail <= head ? gtx.len - head + tail : tail - head;
+	if (head >= gtx.len || avail <= nwords * 4)
+		return -1;
+	for (unsigned i = 0; i < nwords; i++) {
+		wr32(gtx.fifo + head, w[i]);
+		head = g_wrap(head + 4, gtx.len);
+	}
+	__asm__ volatile("dsb sy" ::: "memory");
+	wr32(gtx.head, head);
+	__asm__ volatile("dsb sy" ::: "memory");
+	wr32(APCS_IPC, 1);
+	return 0;
+}
+
+static uint32_t grx_avail(void)
+{
+	uint32_t head = rd32(grx.head), tail = rd32(grx.tail);
+	if (head >= grx.len || tail >= grx.len)
+		return 0;
+	return head < tail ? grx.len - tail + head : head - tail;
+}
+
+static uint32_t grx_word(uint32_t off)
+{
+	return rd32(grx.fifo + g_wrap(rd32(grx.tail) + off, grx.len));
+}
+
+static void grx_advance(uint32_t n)
+{
+	wr32(grx.tail, g_wrap(rd32(grx.tail) + ((n + 7) & ~7u), grx.len));
+}
+
+static void glink_cmd(uint16_t cmd, uint16_t p1, uint32_t p2)
+{
+	uint32_t w[2] = { cmd | (uint32_t)p1 << 16, p2 };
+	glink_tx(w, 2);
+}
+
+/* Handle everything the RPM has sent; returns <0 on an unknown command. */
+static int glink_rx(void)
+{
+	while (grx_avail() >= 8) {
+		uint32_t w0 = grx_word(0), p2 = grx_word(4);
+		uint32_t cmd = w0 & 0xffff, p1 = w0 >> 16, len = 8;
+		if (glog_n < (int)sizeof(glog) - 1)
+			glog[glog_n++] = "0123456789ABCDEF"[cmd & 0xf];
+		glog[glog_n] = 0;
+		switch (cmd) {
+		case 0:		/* VERSION: ack with ours, no features (intentless RPM link) */
+			glink_cmd(1, 1, 0);
+			break;
+		case 1:		/* VERSION_ACK */
+			g_vack = 1;
+			break;
+		case 2:		/* OPEN from the RPM: name follows */
+			g_rcid = p1;
+			g_ropen = 1;
+			len = 8 + (p2 & 0xffff);
+			glink_cmd(4, p1, 0);	/* OPEN_ACK */
+			break;
+		case 4:		/* OPEN_ACK for our lcid */
+			g_lcid_ack = p1;
+			break;
+		case 5:		/* INTENT: p2 pairs of {size, iid} */
+			len = 8 + 8 * p2;
+			break;
+		case 9:
+		case 12: {	/* TX_DATA(_CONT): chunk_size, left_size, data */
+			uint32_t chunk = grx_word(8);
+			if (chunk > 1024)
+				return -1;
+			for (uint32_t i = 0; i < chunk && i < sizeof(gdata); i += 4) {
+				uint32_t v = grx_word(16 + i);
+				for (int k = 0; k < 4 && i + k < sizeof(gdata); k++)
+					gdata[i + k] = v >> (8 * k);
+			}
+			gdata_len = chunk;
+			len = 16 + chunk;
+			break;
+		}
+		case 3:		/* CLOSE */
+			glink_cmd(11, p1, 0);
+			break;
+		case 6: case 7: case 8: case 11: case 13: case 14: case 15:
+			break;
+		default:
+			return -1;
+		}
+		grx_advance(len);
+	}
+	return 0;
+}
+
+static int glink_wait(volatile uint32_t *flag, unsigned ms)
+{
+	for (unsigned i = 0; i < ms * 10; i++) {
+		if (glink_rx() < 0)
+			return -1;
+		if (*flag)
+			return 0;
+		delay_us(100);
+	}
+	return -2;
+}
+
+/* qcom_rpm_smd_write: one LDO-A resource, active set, swen=1 and uv. */
+static uint32_t rpm_msg_id = 1;
+static int rpm_ldo_on(uint32_t ldo, uint32_t uv, char *b)
+{
+	uint32_t w[18];
+	unsigned n = 0;
+	w[n++] = 9;			/* TX_DATA, lcid 1 (param1 << 16) */
+	w[n - 1] |= 1u << 16;
+	w[n++] = 0;			/* iid: intentless */
+	w[n++] = 52;			/* chunk_size */
+	w[n++] = 0;			/* left_size */
+	w[n++] = 0x00716572;		/* "req" */
+	w[n++] = 20 + 24;
+	w[n++] = rpm_msg_id++;
+	w[n++] = 0;			/* active state */
+	w[n++] = 0x616f646c;		/* "ldoa" */
+	w[n++] = ldo;
+	w[n++] = 24;
+	w[n++] = 0x6e657773; w[n++] = 4; w[n++] = 1;	/* swen */
+	w[n++] = 0x00007675; w[n++] = 4; w[n++] = uv;	/* uv */
+	w[n++] = 0;			/* pad 68 -> 72 bytes */
+	gdata_len = 0;
+	char *p = b;
+	if (glink_tx(w, n) < 0)
+		return (void)st(p, "tx full"), -1;
+	for (int i = 0; i < 10000 && !gdata_len; i++) {
+		if (glink_rx() < 0)
+			return (void)st(p, "rx bad cmd"), -1;
+		delay_us(100);
+	}
+	if (!gdata_len)
+		return (void)st(p, "no answer"), -1;
+	/* answer: "req" len, then messages {type, len, ...}: "msg#" id or "err" text */
+	uint32_t t = gdata_len >= 12 ? gdata[8] | gdata[9] << 8 | gdata[10] << 16 | (uint32_t)gdata[11] << 24 : 0;
+	if (t == 0x00727265) {
+		p = st(p, "err ");
+		for (uint32_t i = 16; i < gdata_len && i < 40 && gdata[i]; i++)
+			*p++ = gdata[i];
+		*p = 0;
+		return -1;
+	}
+	p = kv(p, "ans=", t, 8);
+	kv(p, "len=", gdata_len, 2);
+	return t == 0x2367736d ? 0 : -1;	/* "msg#" */
+}
+
+static int ldo_status(uint16_t ppid, char *b)
+{
+	uint32_t own = 0;
+	int a = spmi_apid(ppid, &own);
+	char *p = b;
+	p = kv(p, "apid=", a, 3);
+	p = reg(p, "st=", spmi_rd(a, 0x08));
+	reg(p, "en=", spmi_rd(a, 0x46));
+	return a;
+}
+
+/* GCC: BLSP1 AHB (voted, APCS vote register) and the QUP5 I2C core clock. */
+#define GCC		0x00100000UL
+static int gcc_on(char *b)
+{
+	wr32(GCC + 0x52004, rd32(GCC + 0x52004) | (1u << 17));
+	wr32(GCC + 0x21024, 0);			/* QUP5 I2C RCG: XO 19.2 MHz, no divider */
+	wr32(GCC + 0x21020, rd32(GCC + 0x21020) | 1);	/* UPDATE */
+	for (int i = 0; i < 1000 && (rd32(GCC + 0x21020) & 1); i++)
+		delay_us(1);
+	wr32(GCC + 0x21008, rd32(GCC + 0x21008) | 1);
+	int ok = 0;
+	for (int i = 0; i < 1000; i++) {
+		ok = !(rd32(GCC + 0x17004) >> 31) && !(rd32(GCC + 0x21008) >> 31);
+		if (ok)
+			break;
+		delay_us(1);
+	}
+	char *p = b;
+	p = kv(p, "ahb=", rd32(GCC + 0x17004), 8);
+	p = kv(p, "qup=", rd32(GCC + 0x21008), 8);
+	kv(p, "rcg=", rd32(GCC + 0x21020), 8);
+	return ok ? 0 : -1;
+}
+
+/* TLMM (EAST tile): cfg bits 1:0 pull (3 up), 5:2 func, 8:6 drive (mA/2-1), 9 OE; io bit 0 in, 1 out */
+#define TLMM_PIN(n)	(0x03400000UL + 0x900000UL + 0x1000UL * (n))
+static void tlmm_setup(void)
+{
+	wr32(TLMM_PIN(87), 3 << 2);			/* blsp_i2c5 SDA, 2 mA, no pull */
+	wr32(TLMM_PIN(88), 3 << 2);			/* blsp_i2c5 SCL */
+	wr32(TLMM_PIN(125), (3 << 6) | 3);		/* touch irq: gpio in, 8 mA, pull-up */
+	wr32(TLMM_PIN(89) + 4, 2);			/* reset: high */
+	wr32(TLMM_PIN(89), (1 << 9) | (3 << 6) | 3);	/* gpio out */
+}
+
+static int ts_irq(void)
+{
+	return rd32(TLMM_PIN(125) + 4) & 1;
+}
+
+/* ---- QUP v2 I2C, FIFO mode, polled; one message per call like i2c-qup.c ---- */
+#define QUP		0x0c179000UL
+#define QUP_CONFIG	0x000
+#define QUP_STATE	0x004
+#define QUP_IO_MODE	0x008
+#define QUP_SW_RESET	0x00c
+#define QUP_OPERATIONAL	0x018
+#define QUP_ERROR_FLAGS	0x01c
+#define QUP_MX_OUT_CNT	0x100
+#define QUP_OUT_FIFO	0x110
+#define QUP_MX_WR_CNT	0x150
+#define QUP_MX_IN_CNT	0x200
+#define QUP_MX_RD_CNT	0x208
+#define QUP_IN_FIFO	0x218
+#define QUP_I2C_CLK	0x400
+#define QUP_I2C_STATUS	0x404
+#define QUP_MASTER_GEN	0x408
+#define QUP_CLK_100K	((3 << 8) | 93)		/* hs_div 3, fs_div 19.2M/100k/2-3 */
+
+static uint32_t qup_last_st, qup_last_err, qup_rxtag;
+
+static int qup_state(uint32_t want, uint32_t mask)
+{
+	for (int i = 0; i < 1000; i++) {
+		uint32_t s = rd32(QUP + QUP_STATE);
+		if ((s & 4) && (s & mask) == want)
+			return 0;
+		delay_us(1);
+	}
+	return -1;
+}
+
+static int qup_go(uint32_t st)
+{
+	if (qup_state(0, 0))
+		return -1;
+	wr32(QUP + QUP_STATE, st);
+	return qup_state(st, 3);
+}
+
+/*
+ * rd=0: write n bytes from buf; rd=1: read n bytes (n <= 32) into buf.
+ * Returns 0, -1 controller error, -2 timeout, -3 NACK (bus error flags).
+ */
+static int qup_xfer(uint8_t addr, int rd, uint8_t *buf, unsigned n)
+{
+	uint8_t tx[40];
+	unsigned ntx = 0, nrx = rd ? 2 + n : 0;
+	tx[ntx++] = 0x81;			/* START */
+	tx[ntx++] = addr << 1 | rd;
+	tx[ntx++] = rd ? 0x87 : 0x83;		/* DATARD_STOP / DATAWR_STOP */
+	tx[ntx++] = n;
+	if (!rd)
+		for (unsigned i = 0; i < n; i++)
+			tx[ntx++] = buf[i];
+
+	wr32(QUP + QUP_SW_RESET, 1);
+	if (qup_state(0, 3))
+		return -1;
+	wr32(QUP + QUP_CONFIG, (2 << 8) | 7);
+	wr32(QUP + QUP_MASTER_GEN, 1);		/* v2 tags */
+	if (qup_state(0x10, 0x10))
+		return -1;
+	wr32(QUP + QUP_IO_MODE, 3 << 14);	/* FIFO in and out, pack/unpack */
+	wr32(QUP + QUP_MX_OUT_CNT, 0);
+	wr32(QUP + QUP_MX_IN_CNT, 0);
+	wr32(QUP + QUP_MX_WR_CNT, ntx);
+	if (nrx)
+		wr32(QUP + QUP_MX_RD_CNT, nrx);
+	wr32(QUP + QUP_CONFIG, (2 << 8) | 7 | (nrx ? 0 : 1 << 7));
+	if (qup_go(1))
+		return -1;
+	wr32(QUP + QUP_I2C_CLK, QUP_CLK_100K);
+	if (qup_go(3))
+		return -1;
+	for (unsigned i = 0; i < ntx; i += 4) {
+		uint32_t w = 0;
+		for (unsigned k = 0; k < 4 && i + k < ntx; k++)
+			w |= (uint32_t)tx[i + k] << (8 * k);
+		wr32(QUP + QUP_OUT_FIFO, w);
+	}
+	if (qup_go(1))
+		return -1;
+
+	uint8_t rx[40];
+	unsigned got = 0;
+	int ret = -2;
+	uint64_t t0 = now(), end = t0 + rsr("cntfrq_el0") / 50;	/* 20 ms */
+	while (now() < end) {
+		uint32_t s = rd32(QUP + QUP_I2C_STATUS), e = rd32(QUP + QUP_ERROR_FLAGS);
+		if ((s & 0x38000fc) || (e & 0x7c)) {
+			qup_last_st = s;
+			qup_last_err = e;
+			ret = (s & 0x8) ? -3 : -1;
+			break;
+		}
+		uint32_t op = rd32(QUP + QUP_OPERATIONAL);
+		while ((op & (1 << 5)) && got < nrx) {
+			uint32_t w = rd32(QUP + QUP_IN_FIFO);
+			for (int k = 0; k < 4 && got < nrx; k++)
+				rx[got++] = w >> (8 * k);
+			op = rd32(QUP + QUP_OPERATIONAL);
+		}
+		if (nrx ? got >= nrx : !(op & (1 << 4)) && !(s & (1 << 8)) && now() - t0 > rsr("cntfrq_el0") / 5000) {
+			ret = 0;
+			break;
+		}
+	}
+	for (int i = 0; i < 1000 && (rd32(QUP + QUP_I2C_STATUS) & (1 << 8)); i++)
+		delay_us(1);
+	if (!ret) {
+		uint32_t s = rd32(QUP + QUP_I2C_STATUS);
+		if (s & 0x38000fc) {
+			qup_last_st = s;
+			ret = (s & 0x8) ? -3 : -1;
+		}
+	}
+	qup_go(0);
+	if (!ret && rd) {
+		qup_rxtag = rx[0] | rx[1] << 8;
+		for (unsigned i = 0; i < n; i++)
+			buf[i] = rx[2 + i];
+	}
+	return ret;
+}
+
+/* RMI4 over I2C (rmi_i2c.c): 0xff selects the page, then a 1-byte register address. */
+#define RMI_ADDR	0x20
+static int rmi_page = -1;
+
+static int rmi_set_page(int page)
+{
+	if (page == rmi_page)
+		return 0;
+	uint8_t b[2] = { 0xff, (uint8_t)page };
+	int r = qup_xfer(RMI_ADDR, 0, b, 2);
+	rmi_page = r ? -1 : page;
+	return r;
+}
+
+static int rmi_read(uint16_t a, uint8_t *buf, unsigned n)
+{
+	int r = rmi_set_page(a >> 8);
+	if (r)
+		return r;
+	uint8_t reg8 = a & 0xff;
+	r = qup_xfer(RMI_ADDR, 0, &reg8, 1);
+	return r ? r : qup_xfer(RMI_ADDR, 1, buf, n);
+}
+
+struct rmi_fn {
+	uint8_t num, irqs;
+	uint16_t query, ctrl, data;
+};
+static struct rmi_fn rmi_fns[8];
+static int rmi_nfn;
+
+static char *rerr(char *p, int r)
+{
+	return st(p, r == -3 ? "NACK" : r == -2 ? "timeout" : "ctrl err");
+}
+
+static void rmi_scan(void)
+{
+	char b[72], *p;
+	rmi_nfn = 0;
+	for (int page = 0; page < 4; page++) {
+		for (int a = 0xe9; a > 0x0a; a -= 6) {
+			uint8_t e[6];
+			int r = rmi_read(page << 8 | a, e, 6);
+			if (r) {
+				rerr(st(b, "pdt read: "), r);
+				con_str("RMI", b);
+				return;
+			}
+			if (!e[5] || e[5] == 0xff)
+				break;
+			if (rmi_nfn < 8) {
+				struct rmi_fn *f = &rmi_fns[rmi_nfn++];
+				f->num = e[5];
+				f->irqs = e[4] & 7;
+				f->query = page << 8 | e[0];
+				f->ctrl = page << 8 | e[2];
+				f->data = page << 8 | e[3];
+			}
+			p = b;
+			p = kv(p, "F", e[5], 2);
+			p = kv(p, "pg=", page, 1);
+			p = kv(p, "q=", e[0], 2);
+			p = kv(p, "c=", e[1], 2);
+			p = kv(p, "ctl=", e[2], 2);
+			p = kv(p, "d=", e[3], 2);
+			kv(p, "irq=", e[4], 2);
+			con_str("PDT", b);
+		}
+	}
+	if (!rmi_nfn)
+		con_str("RMI", "no functions in the PDT");
+}
+
+static struct rmi_fn *rmi_find(uint8_t num)
+{
+	for (int i = 0; i < rmi_nfn; i++)
+		if (rmi_fns[i].num == num)
+			return &rmi_fns[i];
+	return 0;
+}
+
+void probe_touch(unsigned live_s)
+{
+	char b[72], *p;
+
+	/* 1. bus before power: a NACK here proves the controller and pins work */
+	if (gcc_on(b) < 0) {
+		con_str("GCC", b);
+		con_str("GCC", "clocks did not start: stop");
+		return;
+	}
+	con_str("GCC", b);
+	tlmm_setup();
+	con_hex2("TLMM", "sda=", rd32(TLMM_PIN(87)), "irq=", rd32(TLMM_PIN(125)));
+	con_hex2("QUP5", "hw=", rd32(QUP + 0x30), "io=", rd32(QUP + QUP_IO_MODE));
+	uint8_t pg[2] = { 0xff, 0 };
+	int r = qup_xfer(RMI_ADDR, 0, pg, 2);
+	p = st(b, "unpowered @20: ");
+	p = r ? rerr(p, r) : st(p, "ACK (rail already on?)");
+	kv(p, " st=", qup_last_st, 8);
+	con_str("I2C", b);
+	ldo_status(0x145, b);
+	con_str("L6 sid1", b);
+	ldo_status(0x15b, b);
+	con_str("L28 sid1", b);
+	con_skip();
+
+	/* 2. RPM: GLINK handshake on the RPM edge, open rpm_requests */
+	if (glink_toc(b) < 0) {
+		con_str("GLINK", b);
+		con_str("GLINK", "no RPM TOC: stop");
+		return;
+	}
+	con_str("TOC", b);
+	p = b;
+	p = kv(p, "rx t/h=", rd32(grx.tail), 4);
+	p = kv(p, "/", rd32(grx.head), 4);
+	p = kv(p, "tx t/h=", rd32(gtx.tail), 4);
+	kv(p, "/", rd32(gtx.head), 4);
+	con_str("FIFOS", b);
+	wr32(gtx.head, 0);	/* as glink_rpm_probe: our ends of both pipes */
+	wr32(grx.tail, 0);
+	__asm__ volatile("dsb sy" ::: "memory");
+	glink_cmd(0, 1, 0);	/* VERSION 1, no features */
+	r = glink_wait(&g_vack, 1000);
+	p = st(b, r ? "no VERSION_ACK " : "VERSION ok ");
+	st(st(p, "rx="), glog);
+	con_str("GLINK", b);
+	if (r)
+		return;
+	glink_wait(&g_ropen, 300);	/* the RPM may open rpm_requests first */
+	{
+		static const char name[] = "rpm_requests";	/* 13 bytes with NUL */
+		uint32_t w[6] = { 2 | 1u << 16, sizeof(name) };	/* OPEN lcid 1 */
+		for (unsigned i = 0; i < sizeof(name); i++)
+			w[2 + i / 4] |= (uint32_t)(uint8_t)name[i] << (8 * (i % 4));
+		glink_tx(w, 6);	/* 8 + 13 -> 24 bytes */
+	}
+	r = glink_wait(&g_lcid_ack, 1000);
+	if (!r && !g_ropen)
+		glink_wait(&g_ropen, 500);
+	p = st(b, r ? "no OPEN_ACK " : "open ok ");
+	p = kv(p, "rcid=", g_rcid, 2);
+	st(st(p, "rx="), glog);
+	con_str("GLINK", b);
+	if (r)
+		return;
+
+	/* 3. touch rails: L6 1.8 V (vio, I2C pull-ups) then L28 3.0 V (vdd) */
+	r = rpm_ldo_on(6, 1800000, b);
+	con_str("RPM L6", b);
+	r |= rpm_ldo_on(28, 3008000, b);
+	con_str("RPM L28", b);
+	delay_us(10000);
+	ldo_status(0x145, b);
+	con_str("L6 sid1", b);
+	ldo_status(0x15b, b);
+	con_str("L28 sid1", b);
+
+	/* 4. reset pulse, boot time, then the RMI4 PDT */
+	wr32(TLMM_PIN(89) + 4, 0);
+	delay_us(10000);
+	wr32(TLMM_PIN(89) + 4, 2);
+	delay_us(300000);
+	rmi_page = -1;
+	con_skip();
+	rmi_scan();
+	struct rmi_fn *f01 = rmi_find(0x01), *f12 = rmi_find(0x12);
+	if (f01) {
+		uint8_t q[21];
+		r = rmi_read(f01->query, q, 21);
+		p = b;
+		if (r)
+			rerr(p, r);
+		else {
+			p = kv(p, "mfr=", q[0], 2);
+			p = st(p, "id=");
+			for (int i = 11; i < 21 && q[i]; i++)
+				*p++ = (q[i] >= 0x20 && q[i] < 0x7f) ? q[i] : '?';
+			*p = 0;
+			p = kv(p, " tag=", qup_rxtag, 4);
+		}
+		con_str("F01", b);
+	}
+	if (!f12) {
+		con_str("F12", "not found: no live view");
+		return;
+	}
+
+	/* 5. live: irq line, F01 interrupt status (reading clears it), F12 data bytes */
+	con_skip();
+	p = st(b, "touch the screen for ");
+	p = dec(p, live_s);
+	st(p, " s");
+	con_str("TOUCH", b);
+	int row = con_row_get();
+	uint64_t t0 = now(), end = t0 + rsr("cntfrq_el0") * live_s;
+	unsigned events = 0;
+	while (now() < end) {
+		uint8_t is = 0, d[12];
+		int irq = ts_irq();
+		if (!irq)
+			events++;
+		rmi_read(f01->data + 1, &is, 1);
+		r = rmi_read(f12->data, d, 12);
+		con_row_set(row);
+		p = b;
+		p = st(p, "t=");
+		p = dec(p, (now() - t0) / rsr("cntfrq_el0"));
+		p = st(p, " irq=");
+		p = dec(p, irq);
+		p = st(p, " n=");
+		p = dec(p, events);
+		p = kv(p, " is=", is, 2);
+		st(p, "      ");
+		con_str("", b);
+		p = b;
+		if (r)
+			p = rerr(p, r);
+		else
+			for (int i = 0; i < 12; i++)
+				p = st(hx(p, d[i], 2), " ");
+		st(p, "      ");
+		con_str("F12 d", b);
+		if (!r) {
+			/* finger 0 if data1 is first: type, x lo/hi, y lo/hi */
+			p = b;
+			p = kv(p, "type=", d[0], 2);
+			p = st(p, "x=");
+			p = dec(p, d[1] | d[2] << 8);
+			p = st(p, " y=");
+			p = dec(p, d[3] | d[4] << 8);
+			st(p, "        ");
+			con_str("F12 f0", b);
+		}
+		delay_us(50000);
+	}
+}

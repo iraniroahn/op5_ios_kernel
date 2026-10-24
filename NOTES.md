@@ -35,6 +35,16 @@ directory stays plaintext on disk; host-tested on ext4, not yet run on the phone
 write guard + log inside the container) added; host-tested, applies after 0083, not
 compiled. `mkadt.py --container MAP`, `sweet-log-pull.sh OUT container`.
 
+**Touch bring-up probe (2026-10-24, not run yet): `shim/out/touch1-59a87f99.img`** (`TOUCH=1
+shim/build.sh`, page `probe_touch()` in shim/probe.c). Steps shown on screen: GCC BLSP1 AHB
+vote (0x152004 bit 17) + QUP5 I2C RCG XO / CBCR 0x121008; TLMM 87/88 func 3, 125 in pull-up,
+89 out high; an I2C write to 0x20 before power (expect NACK); GLINK on the RPM edge (msg RAM
+0x778000+0x7000, TOC "grt0", doorbell 0x17911008 bit 0, VERSION, OPEN "rpm_requests" lcid 1);
+SMD RPM "ldoa" L6 1.8 V then L28 3.008 V (swen, uv); LDO status over SPMI (note: PM8998 LDOs
+are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 ppids, its
+"L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
+product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
+
 **PROBE RESULTS (phone, 2026-10-23, photos IMG_5428-5431):**
 - Screen: shim text at the top edge, no shift: splash is `0x9d400000`, the command-mode
   panel shows CPU writes.
