@@ -341,9 +341,11 @@ static int stress_once(void)
 
 /*
  * CPU speed page (build.sh CPU=1). No voltage is changed. The gold rail
- * sits at 768 mV (cpu1), below the v2 perfcl CPR ceiling of every corner
- * (828 mV up to 1132.8 MHz), so the steps up to 1132.8 MHz are tried with
- * a known-answer stress test each; the first failure stops the climb.
+ * sits at 944 mV (cpu2; cpu1's photo was misread as 768). The msm8998 v2
+ * perfcl CPR ceilings (worst-case voltage per corner) are 828 mV up to
+ * 1132.8 MHz, 900 mV up to 1728 MHz, 952 mV up to 1958.4 MHz: so at
+ * >= 900 mV the steps go up to 1728 MHz, each with a known-answer stress
+ * test; the first failure stops the climb.
  */
 static void __attribute__((noreturn, unused)) cpu_speed_page(void)
 {
@@ -362,11 +364,15 @@ static void __attribute__((noreturn, unused)) cpu_speed_page(void)
 	}
 	con_hex2("PLL gold", "mode=", rd32(GOLD_PLL), "l=", rd32(GOLD_PLL + 4));
 	con_hex2("", "user=", rd32(GOLD_PLL + 0xc), "cfg=", rd32(GOLD_PLL + 0x10));
-	uint32_t mv = smps_mv(0x138), maxl = (mv >= 700 && mv < 1000) ? 0x3b : 0x20;
+	uint32_t mv = smps_mv(0x138), maxl = 0x20;
+	if (mv >= 900 && mv < 1150)
+		maxl = 0x5a;
+	else if (mv >= 828 && mv < 1150)
+		maxl = 0x3b;
 	con_hex2("LIMIT", "mV=", mv, "max_l=", maxl);
 	con_skip();
 	stress_once();
-	static const uint32_t ls[] = { 0x20, 0x26, 0x2a, 0x2f, 0x33, 0x37, 0x3b };
+	static const uint32_t ls[] = { 0x20, 0x3b, 0x42, 0x4a, 0x4e, 0x52, 0x56, 0x5a };
 	uint32_t best = 0x20;
 	for (unsigned i = 0; i < sizeof(ls) / sizeof(ls[0]) && ls[i] <= maxl; i++) {
 		con_hex2("TRY", "l=", ls[i], "mhz=", ls[i] * 192 / 10);
@@ -419,7 +425,12 @@ static void __attribute__((noreturn)) gold_main(uint64_t dtb)
 		 * already locked at 614.4 MHz (L 0x20). Third probe: the switch
 		 * works and halves the loop time. No voltage change involved.
 		 */
+#ifdef GOLD_L
+		/* build.sh GOLD_L=0x..: gold PLL at L x 19.2 MHz (cpu2: up to 0x3b stable at 944 mV) */
+		con_hex2("GOLDCLK", "pll=", gold_pll_set(GOLD_L), "l=", rd32(GOLD_PLL + 4));
+#else
 		con_hex2("GOLDCLK", "pll=", gold_rcg_select(0x300), "cfg=", rd32(0x17811054));
+#endif
 		test_gic();
 		gold_gicr_prepare();
 		uint64_t gt = speed_ticks();

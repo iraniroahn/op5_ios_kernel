@@ -45,6 +45,14 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**🎉 CPU probe 2 RESULT (video 2026-10-25 21:12): gold at 1132.8 MHz, 0 errors.** S13 en 0x80,
+**mV 0x3B0 = 944 mV** (cpu1's blurry photo was misread; regs 0x40/0x41 = 0xB0/0x03), APID/owner
+0x32/0; S10 828 mV, APID 0x41 owner 0. Stock PLL sequence works; ticks per L: 0x20 0x7270E1,
+0x26 0x605F0E, 0x2a 0x57316E, 0x2f 0x4DEACF, 0x33 0x47CE5B, 0x37 0x429575, 0x3b 0x3E11D5
+(1.84x). At 944 mV the v2 CPR ceilings allow up to 1728 MHz (900 mV). New: `GOLD_L=0x..`
+build option (gold_main sets the gold PLL before the loader). **ios-1132mhz-2352b471** = kernel
+0087 + GOLD_L=0x3b; **cpu3-4796279a** climbs 0x3b 0x42 0x4a 0x4e 0x52 0x56 0x5a (to 1728 MHz).
+
 **CPU probe 1 RESULT (video 2026-10-25 21:04):** SAW4 PMIC_STS 0 (gold and silver). S13 type
 0x1C0A, en reg 0; regs 0x40/0x41 = 0x00/0x03 -> the set point is mV LSB/MSB (FTS426 style):
 **gold rail 768 mV**; S10 = 0x3C/0x03 = **silver 828 mV** (silver runs 1555.2 MHz). PLL gold
