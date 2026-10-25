@@ -45,6 +45,10 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**ios-hwscale-0d15ad00 FROZE (user, no detail).** Split: testA-1728-noscale-29ff26d4 (kernel 0088,
+GOLD 0x5a/912 mV, sweetfb_hwscale=0) and testB-614-hwscale-12e66b4c (kernel 0088, hwscale on,
+gold at the default 614.4 MHz). Log pull from Android: tools/sweet-log-pull.sh OUT container.
+
 **Patch 0089: topaz IOSurface fixes 0131-0139 ported (blank widgets/icons).** No zeroed clients
 (0131), IOSurfaceWrapClientImage/Memory (0132), surface values / bulk attachments /
 purgeability / accelerator / YCbCr (0133), IOSurfaceAddress surfaces around the creator's own
