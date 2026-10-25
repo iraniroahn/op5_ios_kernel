@@ -805,6 +805,18 @@ static void __attribute__((noreturn)) probe_run(uint64_t dtb)
 	(void)dtb;
 	cpu_speed_page();
 #endif
+#ifdef GFX_PROBE
+	/* build.sh GFX=1: display pipes and GPU power-up; never returns */
+	(void)dtb;
+	stage = "probe gfx";
+	con_clear(RED);
+	con_str("PROBE", "display pipes + Adreno 540 power");
+	probe_gfx();
+	con_skip();
+	con_str("DONE", "hold power + vol up to quit");
+	for (;;)
+		__asm__ volatile("wfe");
+#endif
 #ifdef TOUCH_PROBE
 	/* build.sh TOUCH=1: only the touch page; it never returns (hold power + vol up) */
 	(void)dtb;

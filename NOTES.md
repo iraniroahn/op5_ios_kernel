@@ -45,6 +45,16 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**GPU + resolution, step 1: `shim/out/gfx1-b97cc757.img`** (GFX=1, gold at 1728 MHz). Page 1 part
+A, read only: every MDP SSPP with an address (VIG0-3 with QSEED3 version/op mode, DMA0-3), CTL0/1
+LAYER0/TOP, INTF1 enable, PP0 autorefresh: which pipe ABL scans the splash out of, and whether a
+QSEED3 pipe is free for hardware scaling. Part B: Adreno 540 power-up after mainline
+gpucc-msm8998.c / gdsc.c / downstream msm8998-gpu.dtsi (chipid 0x05040000, a540_gpmu.fw2,
+a540_zap): GCC gpu_cfg_ahb/bimc_gfx/gpu_bimc_gfx + GPLL0 votes, PM8005 S1 (vdd_gfx, ppid
+0x514) status (enabled at 700 mV if off and EE 0 owns it), CX GDSC, gfx3d root on XO, GX GDSC
+(BCR reset, AON reset, unclamp), gfx3d + rbbmtimer clocks, then RBBM_STATUS/STATUS3 and the
+CP perf counter, each step gated on the previous one.
+
 **🎉 CPU probe 4 RESULT (photo 2026-10-25): S13 raised 896 -> 904 mV (RAISE was 0x380 now 0x388),
 gold climbed to L 0x5A = 1728 MHz, every step 0 errors.** Ticks: 0x3b 0x3E11DB, 0x42 0x377C8C,
 0x4a 0x317CEC, 0x4e 0x2EF33C, 0x52 0x2CA8EE, 0x56 0x2A952A, 0x5a 0x28B0AB (2.81x of 614 MHz).

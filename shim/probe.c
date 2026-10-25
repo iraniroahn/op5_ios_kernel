@@ -1274,3 +1274,155 @@ int probe_spmi_write(uint16_t ppid, uint8_t addr, const uint8_t *buf, unsigned n
 	}
 	return -2;
 }
+
+/* ---- display pipes (resolution) and Adreno 540 power-up (GPU), build.sh GFX=1 ---- */
+
+/*
+ * MDP (msm8998 DPU 3.0, mainline dpu_3_0_msm8998.h): base 0xc901000. SSPP
+ * VIG0-3 at +0x4000/0x6000/0x8000/0xa000 (QSEED3 scaler at +0xa00),
+ * DMA0-3 at +0x24000..0x2a000; SRC_SIZE 0x00, OUT_SIZE 0x0c, SRC0_ADDR
+ * 0x14, YSTRIDE0 0x24, FORMAT 0x30. CTL0/1 at +0x1000/0x1200 (LAYER0 0x00,
+ * TOP 0x14), INTF1 +0x6a800, PINGPONG0 +0x70000 (autorefresh cfg 0x30).
+ * ABL's splash keeps the MDP clocked, so these reads are safe. Read only.
+ */
+#define MDP	0x0c901000UL
+static void probe_mdp(void)
+{
+	static const uint32_t off[8] = { 0x4000, 0x6000, 0x8000, 0xa000, 0x24000, 0x26000, 0x28000, 0x2a000 };
+	static const char names[8][5] = { "VIG0", "VIG1", "VIG2", "VIG3", "DMA0", "DMA1", "DMA2", "DMA3" };
+	int shown = 0;
+	for (int i = 0; i < 8; i++) {
+		uintptr_t p = MDP + off[i];
+		uint32_t addr = rd32(p + 0x14);
+		if (!addr)
+			continue;
+		shown++;
+		con_hex2(names[i], "addr=", addr, "fmt=", rd32(p + 0x30));
+		con_hex2("", "src=", rd32(p + 0x00), "out=", rd32(p + 0x0c));
+		con_hex2("", "stride=", rd32(p + 0x24), "opmode=", rd32(p + 0x38));
+		if (i < 4)
+			con_hex2("", "qseed_v=", rd32(p + 0xa00), "qseed_op=", rd32(p + 0xa04));
+	}
+	if (!shown)
+		con_str("MDP", "no SSPP has an address");
+	con_hex2("CTL0", "layer0=", rd32(MDP + 0x1000), "top=", rd32(MDP + 0x1014));
+	con_hex2("CTL1", "layer0=", rd32(MDP + 0x1200), "top=", rd32(MDP + 0x1214));
+	con_hex2("INTF1", "en=", rd32(MDP + 0x6a800), "pp0_auto=", rd32(MDP + 0x70030));
+}
+
+/*
+ * Adreno 540 power, as mainline gpucc-msm8998.c / gdsc.c and downstream
+ * msm8998-gpu.dtsi: GCC gpu_cfg_ahb 0x71004 (needed before any GPUCC
+ * access), bimc_gfx 0x46040, gpu_bimc_gfx 0x71010, GPLL0 GPU votes
+ * 0x5200c bits 3/4; GPUCC 0x5065000: CX GDSC 0x1004, GX GDSC 0x1094
+ * (clamp_io 0x130, BCR 0x1090, needs vdd_gfx = PM8005 S1, ppid 0x514),
+ * gfx3d RCG 0x1070 (root forced on, XO), gfx3d CBCR 0x1098, rbbmtimer
+ * 0x10d0. Only when every step reports on are GPU registers (0x5000000)
+ * read: RBBM_STATUS 0x4f5, RBBM_STATUS3 0x530, PERFCTR_CP_0_LO 0x3a0.
+ */
+#define GPUCC	0x05065000UL
+#define GPU	0x05000000UL
+static int wait_bit(uintptr_t reg, uint32_t mask, uint32_t want)
+{
+	for (int i = 0; i < 2000; i++) {
+		if ((rd32(reg) & mask) == want)
+			return 1;
+		delay_us(5);
+	}
+	return 0;
+}
+
+static void probe_gpu(void)
+{
+	char b[72], *p;
+	const uintptr_t gcc = 0x00100000;
+	wr32(gcc + 0x71004, rd32(gcc + 0x71004) | 1);
+	wr32(gcc + 0x46040, rd32(gcc + 0x46040) | 1);
+	wr32(gcc + 0x71010, rd32(gcc + 0x71010) | 1);
+	wr32(gcc + 0x5200c, rd32(gcc + 0x5200c) | (3u << 3));
+	delay_us(100);
+	con_hex2("GCC gpu", "ahb=", rd32(gcc + 0x71004), "bimc=", rd32(gcc + 0x71010));
+	if (rd32(gcc + 0x71004) >> 31) {
+		con_str("GPU", "cfg ahb clock off: GPUCC unreachable, stop");
+		return;
+	}
+
+	/* vdd_gfx */
+	uint32_t own = 7;
+	int apid = spmi_apid(0x514, &own);
+	int lsb = spmi_rd(apid, 0x40), msb = spmi_rd(apid, 0x41), en = spmi_rd(apid, 0x46);
+	p = b;
+	p = kv(p, "apid=", apid, 3);
+	p = kv(p, "own=", own, 1);
+	p = reg(p, "en=", en);
+	kv(p, "mV=", (lsb >= 0 && msb >= 0) ? (uint32_t)(lsb | msb << 8) : 0, 4);
+	con_str("S1 gfx", b);
+	int gfx_on = en >= 0 && (en & 0x80);
+	if (!gfx_on && own == 0 && apid >= 0) {
+		/* off: 700 mV (inside the 524-1100 mV range of the DT) and enable */
+		uint8_t v[2] = { 700 & 0xff, 700 >> 8 }, e = 0x80;
+		int r1 = probe_spmi_write(0x514, 0x40, v, 2);
+		int r2 = probe_spmi_write(0x514, 0x46, &e, 1);
+		delay_us(2000);
+		en = spmi_rd(apid, 0x46);
+		gfx_on = en >= 0 && (en & 0x80);
+		p = b;
+		p = kv(p, "wr=", (uint32_t)(r1 | r2) & 0xff, 2);
+		p = reg(p, "en=", en);
+		kv(p, "mV=", (uint32_t)(spmi_rd(apid, 0x40) | spmi_rd(apid, 0x41) << 8), 4);
+		con_str("S1 on", b);
+	}
+
+	con_hex2("GPUCC", "cx=", rd32(GPUCC + 0x1004), "gx=", rd32(GPUCC + 0x1094));
+	con_hex2("", "rcg=", rd32(GPUCC + 0x1070), "cfg=", rd32(GPUCC + 0x1074));
+	con_hex2("", "gfx3d=", rd32(GPUCC + 0x1098), "timer=", rd32(GPUCC + 0x10d0));
+
+	/* CX GDSC */
+	wr32(GPUCC + 0x1004, rd32(GPUCC + 0x1004) & ~1u);
+	int cx = wait_bit(GPUCC + 0x1004, 1u << 31, 1u << 31);
+	/* gfx3d root: XO, root forced on (downstream qcom,force-enable-root-clk) */
+	wr32(GPUCC + 0x1074, 0);
+	wr32(GPUCC + 0x1070, rd32(GPUCC + 0x1070) | 1);
+	wait_bit(GPUCC + 0x1070, 1, 0);
+	wr32(GPUCC + 0x1070, rd32(GPUCC + 0x1070) | 2);
+	int gx = 0;
+	if (cx && gfx_on) {
+		/* GX: SW_RESET (BCR), AON reset + unclamp, then on (gdsc_enable) */
+		wr32(GPUCC + 0x1090, 1);
+		delay_us(10);
+		wr32(GPUCC + 0x1090, 0);
+		wr32(GPUCC + 0x130, rd32(GPUCC + 0x130) | (1u << 4));
+		delay_us(10);
+		wr32(GPUCC + 0x130, rd32(GPUCC + 0x130) & ~(1u << 4));
+		wr32(GPUCC + 0x130, rd32(GPUCC + 0x130) & ~1u);
+		wr32(GPUCC + 0x1094, rd32(GPUCC + 0x1094) & ~1u);
+		gx = wait_bit(GPUCC + 0x1094, 1u << 31, 1u << 31);
+		wr32(GPUCC + 0x1098, rd32(GPUCC + 0x1098) | (1u << 14));	/* retain mem */
+	}
+	con_hex2("GDSC", "cx_on=", cx, "gx_on=", gx);
+	if (!gx) {
+		con_hex2("", "cx=", rd32(GPUCC + 0x1004), "gx=", rd32(GPUCC + 0x1094));
+		con_str("GPU", "GX power domain did not come on: stop");
+		return;
+	}
+	wr32(GPUCC + 0x1098, rd32(GPUCC + 0x1098) | 1);
+	wr32(GPUCC + 0x10d0, rd32(GPUCC + 0x10d0) | 1);
+	int ck = wait_bit(GPUCC + 0x1098, 1u << 31, 0) && wait_bit(GPUCC + 0x10d0, 1u << 31, 0);
+	con_hex2("CLOCKS", "gfx3d=", rd32(GPUCC + 0x1098), "timer=", rd32(GPUCC + 0x10d0));
+	if (!ck) {
+		con_str("GPU", "core clock did not start: stop");
+		return;
+	}
+	con_hex2("RBBM", "status=", rd32(GPU + 0x4f5 * 4), "status3=", rd32(GPU + 0x530 * 4));
+	uint32_t c0 = rd32(GPU + 0x3a0 * 4);
+	delay_us(1000);
+	con_hex2("", "cp_ctr0=", c0, "later=", rd32(GPU + 0x3a0 * 4));
+	con_str("GPU", "registers answer: Adreno 540 powered");
+}
+
+void probe_gfx(void)
+{
+	probe_mdp();
+	con_skip();
+	probe_gpu();
+}
