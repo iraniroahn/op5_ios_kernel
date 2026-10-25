@@ -45,6 +45,12 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**🎉 CPU probe 4 RESULT (photo 2026-10-25): S13 raised 896 -> 904 mV (RAISE was 0x380 now 0x388),
+gold climbed to L 0x5A = 1728 MHz, every step 0 errors.** Ticks: 0x3b 0x3E11DB, 0x42 0x377C8C,
+0x4a 0x317CEC, 0x4e 0x2EF33C, 0x52 0x2CA8EE, 0x56 0x2A952A, 0x5a 0x28B0AB (2.81x of 614 MHz).
+**ios-1728mhz-c332912f** = kernel 0087 + GOLD_L=0x5a GOLD_MV=912 (8 mV margin over the tested 904,
+still under the 952 mV ceiling of the next corners).
+
 **CPU probe 3 RESULT (photo 2026-10-25): gold rail is 896 mV (0x380), not 944** (cpu2's video frame
 was misread; cpu1 = regs 0x80/0x03). So max_l stayed 0x3b: 1132.8 MHz, stress 0 errors.
 **cpu4-0960854f**: SPMI write path added (probe_spmi_write: chnls 0x8400000 + 0x8000*APID,
