@@ -45,6 +45,13 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**CPU probe 3 RESULT (photo 2026-10-25): gold rail is 896 mV (0x380), not 944** (cpu2's video frame
+was misread; cpu1 = regs 0x80/0x03). So max_l stayed 0x3b: 1132.8 MHz, stress 0 errors.
+**cpu4-0960854f**: SPMI write path added (probe_spmi_write: chnls 0x8400000 + 0x8000*APID,
+EXT_WRITEL; S13 is owned by EE 0), raises S13 896 -> 904 mV (2-byte write to 0x40, only up,
+only from 850-950, max 960), then climbs 0x3b..0x5a (to 1728 MHz, ceiling 900 mV). Build
+options GOLD_L + GOLD_MV for the iOS shim (rail first; above 0x3b only if the rail >= 900).
+
 **🎉 CPU probe 2 RESULT (video 2026-10-25 21:12): gold at 1132.8 MHz, 0 errors.** S13 en 0x80,
 **mV 0x3B0 = 944 mV** (cpu1's blurry photo was misread; regs 0x40/0x41 = 0xB0/0x03), APID/owner
 0x32/0; S10 828 mV, APID 0x41 owner 0. Stock PLL sequence works; ticks per L: 0x20 0x7270E1,

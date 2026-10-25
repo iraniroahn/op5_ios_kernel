@@ -1244,3 +1244,33 @@ int probe_spmi_owner(uint16_t ppid, uint32_t *owner)
 {
 	return spmi_apid(ppid, owner);
 }
+
+/*
+ * Write 1-4 bytes to a PMIC register by PPID through this EE's channel
+ * (arbiter v3 "chnls" 0x8400000, 0x8000 per APID, EE 0; spmi-pmic-arb.c
+ * pmic_arb_offset_v2 / fmt_cmd_v2, EXT_WRITEL = opcode 0). Only for a
+ * peripheral this EE owns. 0 on success, <0 on error.
+ */
+#define SPMI_CHNLS	0x08400000UL
+int probe_spmi_write(uint16_t ppid, uint8_t addr, const uint8_t *buf, unsigned n)
+{
+	uint32_t own = 7;
+	int apid = spmi_apid(ppid, &own);
+	if (apid < 0 || own != 0 || n < 1 || n > 4)
+		return -1;
+	uintptr_t ch = SPMI_CHNLS + 0x8000UL * apid;
+	uint32_t w = 0;
+	for (unsigned i = 0; i < n; i++)
+		w |= (uint32_t)buf[i] << (8 * i);
+	wr32(ch + 0x10, w);			/* WDATA0 */
+	__asm__ volatile("dmb oshst" ::: "memory");
+	wr32(ch, ((uint32_t)addr << 4) | (n - 1));	/* EXT_WRITEL, byte count - 1 */
+	__asm__ volatile("dsb osh" ::: "memory");
+	for (int i = 0; i < 1000; i++) {
+		uint32_t s = rd32(ch + 0x08);
+		if (s & 1)
+			return (s & 0xe) ? -(int)s : 0;
+		delay_us(1);
+	}
+	return -2;
+}

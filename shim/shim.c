@@ -313,12 +313,31 @@ static int gold_pll_set(uint32_t l)
  * qcom_spmi-regulator.c). cpu1 read 0x0300 = 768 mV gold, 0x033C = 828 mV
  * silver (which runs 1555.2 MHz). Returns mV or 0.
  */
-static uint32_t smps_mv(uint16_t ppid)
+static uint32_t __attribute__((unused)) smps_mv(uint16_t ppid)
 {
 	int lsb = probe_spmi_reg(ppid, 0x40), msb = probe_spmi_reg(ppid, 0x41);
 	if (lsb < 0 || msb < 0)
 		return 0;
 	return (uint32_t)lsb | (uint32_t)msb << 8;
+}
+
+/*
+ * Raise the gold rail (S13, owned by this EE: cpu2 APID 0x32 owner 0) to
+ * mv, only upwards, only from a sane start (850-950 mV) and to at most
+ * 960 mV (the v2 perfcl ceiling for 1958.4 MHz is 952). Nothing else drives
+ * S13 now: OSM is off and SAW4 reports 0. Returns the mV read back after,
+ * or 0 when nothing was written.
+ */
+static uint32_t __attribute__((unused)) gold_rail_raise(uint32_t mv)
+{
+	uint32_t cur = smps_mv(0x138);
+	if (cur < 850 || cur > 950 || mv <= cur || mv > 960)
+		return 0;
+	uint8_t b[2] = { (uint8_t)mv, (uint8_t)(mv >> 8) };
+	if (probe_spmi_write(0x138, 0x40, b, 2) < 0)
+		return 0;
+	delay_ms(2);	/* FTS slew is mV per us: far shorter */
+	return smps_mv(0x138);
 }
 
 /* Integer and memory work with a known answer: 0 = correct. */
@@ -340,12 +359,12 @@ static int stress_once(void)
 }
 
 /*
- * CPU speed page (build.sh CPU=1). No voltage is changed. The gold rail
- * sits at 944 mV (cpu2; cpu1's photo was misread as 768). The msm8998 v2
- * perfcl CPR ceilings (worst-case voltage per corner) are 828 mV up to
- * 1132.8 MHz, 900 mV up to 1728 MHz, 952 mV up to 1958.4 MHz: so at
- * >= 900 mV the steps go up to 1728 MHz, each with a known-answer stress
- * test; the first failure stops the climb.
+ * CPU speed page (build.sh CPU=1). The gold rail sits at 896 mV (0x380;
+ * cpu3, earlier photos misread). The msm8998 v2 perfcl CPR ceilings
+ * (worst-case voltage per corner) are 828 mV up to 1132.8 MHz, 900 mV up to
+ * 1728 MHz, 952 mV up to 1958.4 MHz. cpu4 raises the rail 8 mV to 904 so
+ * up to 1728 MHz is within those ceilings, then climbs with a known-answer
+ * stress test per step; the first failure stops the climb.
  */
 static void __attribute__((noreturn, unused)) cpu_speed_page(void)
 {
@@ -364,6 +383,8 @@ static void __attribute__((noreturn, unused)) cpu_speed_page(void)
 	}
 	con_hex2("PLL gold", "mode=", rd32(GOLD_PLL), "l=", rd32(GOLD_PLL + 4));
 	con_hex2("", "user=", rd32(GOLD_PLL + 0xc), "cfg=", rd32(GOLD_PLL + 0x10));
+	uint32_t was = smps_mv(0x138);
+	con_hex2("RAISE", "was=", was, "now=", gold_rail_raise(904));
 	uint32_t mv = smps_mv(0x138), maxl = 0x20;
 	if (mv >= 900 && mv < 1150)
 		maxl = 0x5a;
@@ -372,7 +393,7 @@ static void __attribute__((noreturn, unused)) cpu_speed_page(void)
 	con_hex2("LIMIT", "mV=", mv, "max_l=", maxl);
 	con_skip();
 	stress_once();
-	static const uint32_t ls[] = { 0x20, 0x3b, 0x42, 0x4a, 0x4e, 0x52, 0x56, 0x5a };
+	static const uint32_t ls[] = { 0x3b, 0x42, 0x4a, 0x4e, 0x52, 0x56, 0x5a };
 	uint32_t best = 0x20;
 	for (unsigned i = 0; i < sizeof(ls) / sizeof(ls[0]) && ls[i] <= maxl; i++) {
 		con_hex2("TRY", "l=", ls[i], "mhz=", ls[i] * 192 / 10);
@@ -426,7 +447,16 @@ static void __attribute__((noreturn)) gold_main(uint64_t dtb)
 		 * works and halves the loop time. No voltage change involved.
 		 */
 #ifdef GOLD_L
-		/* build.sh GOLD_L=0x..: gold PLL at L x 19.2 MHz (cpu2: up to 0x3b stable at 944 mV) */
+		/*
+		 * build.sh GOLD_L=0x.. [GOLD_MV=..]: gold rail first (only up), then
+		 * the gold PLL at L x 19.2 MHz. cpu2/cpu3: 0x3b stable at 896 mV.
+		 */
+#ifdef GOLD_MV
+		con_hex2("GOLDVDD", "was=", smps_mv(0x138), "now=", gold_rail_raise(GOLD_MV));
+		if (GOLD_L > 0x3b && smps_mv(0x138) < 900)
+			con_hex2("GOLDCLK", "pll=", gold_pll_set(0x3b), "l(capped)=", rd32(GOLD_PLL + 4));
+		else
+#endif
 		con_hex2("GOLDCLK", "pll=", gold_pll_set(GOLD_L), "l=", rd32(GOLD_PLL + 4));
 #else
 		con_hex2("GOLDCLK", "pll=", gold_rcg_select(0x300), "cfg=", rd32(0x17811054));

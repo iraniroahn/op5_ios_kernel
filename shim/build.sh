@@ -20,6 +20,7 @@ CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align
 [ "${TOUCH:-0}" = 1 ] && CFLAGS="$CFLAGS -DTOUCH_PROBE"
 [ "${CPU:-0}" = 1 ] && CFLAGS="$CFLAGS -DCPU_PROBE"
 [ -n "${GOLD_L:-}" ] && CFLAGS="$CFLAGS -DGOLD_L=$GOLD_L"
+[ -n "${GOLD_MV:-}" ] && CFLAGS="$CFLAGS -DGOLD_MV=$GOLD_MV"
 SRCS="start.S shim.c console.c mmu.c fdt.c loader.c ufs.c probe.c"
 DTB=${DTB:-../dtb/boot_unpacked/dtb}
 [ -f "$DTB" ] || { echo "error: no DTB at $DTB (run tools/unpack_bootv0.py on your stock boot.img, or set DTB=)" >&2; exit 1; }
