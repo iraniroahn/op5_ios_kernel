@@ -345,7 +345,7 @@ static int stress_once(void)
  * (the worst-case voltage of each corner): <=1132.8 MHz at 828 mV, <=1728
  * at 900 mV, <=1958.4 at 952 mV. No voltage is changed.
  */
-static void __attribute__((noreturn)) cpu_speed_page(void)
+static void __attribute__((noreturn, unused)) cpu_speed_page(void)
 {
 	stage = "cpu speed";
 	con_clear(RED);

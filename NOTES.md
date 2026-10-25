@@ -52,7 +52,8 @@ series), resolution looks poor (nearest 1.44x upscale), no way home except both 
 Patch **0087** (CI run 40182485472): capacitive keys = F1A page 2 data 0 (bit 1 left, bit 0
 right, OnePlus int_key_report_s3508): right = Home (Menu; double = app switcher), left = Back
 as an injected edge swipe (finger 9, x 2 -> 842 in ~130 ms), sweetkeyswap=1 swaps; I2C at
-400 kHz; F12/F1A read only when their F01 interrupt bits (PDT order) are set.
+400 kHz; F12/F1A read only when their F01 interrupt bits (PDT order) are set. Built (release
+kernel-run40182485472, sha c03612ee); boot image `shim/out/ios-keys2-7b71dae6.img`.
 **CPU speed probe `shim/out/cpu1-d7e7a375.img`** (CPU=1 shim/build.sh): reads the gold rail
 (PM8998 S13 = APC1, ppid 0x138, FTS2.5 range 0x40 / set 0x41) and SAW4 PMIC_STS 0x17812c18,
 then raises the gold PLL (clock-osm.c setup sequence, while gold runs on GPLL0) only up to the
