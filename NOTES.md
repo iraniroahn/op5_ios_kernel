@@ -45,6 +45,12 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**Patch 0088: hardware scaling in iOS** (user: skip scale1, test directly). SweetFramebuffer: with
+fScaled and boot-arg sweetfb_hwscale (default 1), the first frame checks VIG0 (QSEED3 0x1002,
+src = out = 1080x1920), blacks the 750x1334 area, programs QSEED3 bilinear + VIG0 SRC_SIZE
+750x1334 + CTL0 FLUSH; from then on presentScaled copies the frame 1:1 into the top-left of the
+panel buffer (1M pixels per frame instead of 2M gathered writes). sweetfb_hwscale=0 = old path.
+
 **gfx1 RESULT (photo 2026-10-25): both work.** Display: the splash is scanned out of **VIG0**
 (addr 0x9D400000, fmt 0x237FF ARGB8888, src = out = 1080x1920, stride 0x10E0, opmode
 0x80006000, **QSEED3 v0x1002 present, op_mode 0 = off**); CTL0 layer0 0x01000005 top 0x20020;
