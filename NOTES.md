@@ -45,6 +45,16 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**CPU probe 1 RESULT (video 2026-10-25 21:04):** SAW4 PMIC_STS 0 (gold and silver). S13 type
+0x1C0A, en reg 0; regs 0x40/0x41 = 0x00/0x03 -> the set point is mV LSB/MSB (FTS426 style):
+**gold rail 768 mV**; S10 = 0x3C/0x03 = **silver 828 mV** (silver runs 1555.2 MHz). PLL gold
+mode 7, L 0x20, USER_CTRL 0x9, CONFIG_CTL 0x20004AA8. The reprogram at L 0x20 failed
+("NO LOCK": PLL_STATUS bit 16 never set; stock clock-osm.c never polls it) so gold stayed on
+GPLL0 600 MHz (ticks 0x753000), stress 0 errors. **cpu2-9de0e11e**: stock mode sequence with
+no lock poll, ABL USER_CTRL/CONFIG kept, RCG switch-back as the liveness check, steps L 0x20
+0x26 0x2a 0x2f 0x33 0x37 0x3b (614 -> 1132.8 MHz) at the unchanged 768 mV, 2000 stress rounds
+each; prints the S13/S10 APID and owner (for a later voltage raise over SPMI).
+
 **iOS with touch (ios-touch-87ea1e93, video 2026-10-25 20:47): touch works in iOS** (Spotlight,
 keyboard typing, Safari, Control Center, Focus). Problems reported: input lag (slow UI), widgets
 are blank white tiles (topaz fixed widgets with the SweetSurface patches 0131-0139, not in our

@@ -30,3 +30,4 @@ void probe_osm_gold_request(uint32_t idx);
 uint32_t probe_osm_gold_mhz(void);
 void probe_touch(unsigned live_s);
 int probe_spmi_reg(uint16_t ppid, uint8_t addr);
+int probe_spmi_owner(uint16_t ppid, uint32_t *owner);

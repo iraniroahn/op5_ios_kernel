@@ -1238,3 +1238,9 @@ int probe_spmi_reg(uint16_t ppid, uint8_t addr)
 	uint32_t own;
 	return spmi_rd(spmi_apid(ppid, &own), addr);
 }
+
+/* APID and owner EE of a PPID, for shim.c; <0 when not mapped. */
+int probe_spmi_owner(uint16_t ppid, uint32_t *owner)
+{
+	return spmi_apid(ppid, owner);
+}

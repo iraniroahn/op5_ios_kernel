@@ -277,9 +277,14 @@ static int gold_rcg_select(uint32_t sel)
 static void __attribute__((noreturn)) probe_run(uint64_t dtb);
 
 /*
- * Gold cluster PLL (perfcl, 0x17816000; downstream clock-osm.c
- * clk_osm_setup_cluster_pll): reprogrammed only while gold runs from GPLL0
- * (RCG 0x400), then gold goes back to it (0x300). Returns 1 when locked.
+ * Gold cluster PLL (perfcl, 0x17816000): reprogrammed only while gold runs
+ * from GPLL0 (RCG 0x400), with the mode sequence of downstream clock-osm.c
+ * clk_osm_setup_cluster_pll (off, L, BYPASSNL, RESET_N, OUTCTRL). That
+ * driver never polls a lock bit (cpu1: PLL_STATUS bit 16 never set) and
+ * keeps nothing else; USER_CTRL/CONFIG_CTL stay as ABL left them (main
+ * output enabled for the 0x300 mux input). The switch back proves the PLL
+ * runs: an RCG update to a dead source never completes, and
+ * gold_rcg_select() then restores GPLL0. Returns 1 when gold is on the PLL.
  */
 #define GOLD_PLL	0x17816000UL
 static int gold_pll_set(uint32_t l)
@@ -288,20 +293,14 @@ static int gold_pll_set(uint32_t l)
 		return 0;
 	wr32(GOLD_PLL + 0x0, 0);		/* MODE: off */
 	wr32(GOLD_PLL + 0x4, l);		/* L_VAL: l x 19.2 MHz */
-	wr32(GOLD_PLL + 0xc, 0x01000008);	/* USER_CTRL */
-	wr32(GOLD_PLL + 0x10, 0x20004AA8);	/* CONFIG_CTL_LO */
+	__asm__ volatile("dsb sy" ::: "memory");
+	delay_ms(1);
 	wr32(GOLD_PLL + 0x0, 0x2);		/* BYPASSNL */
 	__asm__ volatile("dsb sy" ::: "memory");
 	delay_ms(1);
 	wr32(GOLD_PLL + 0x0, 0x6);		/* + RESET_N */
 	__asm__ volatile("dsb sy" ::: "memory");
-	int locked = 0;
-	for (int i = 0; i < 100 && !locked; i++) {
-		locked = (rd32(GOLD_PLL + 0x2c) >> 16) & 1;
-		delay_ms(1);
-	}
-	if (!locked)
-		return 0;	/* gold stays on GPLL0 (600 MHz) */
+	delay_ms(5);				/* stock waits 50-75 us */
 	wr32(GOLD_PLL + 0x0, 0x7);		/* + OUTCTRL */
 	__asm__ volatile("dsb sy" ::: "memory");
 	delay_ms(1);
@@ -309,16 +308,17 @@ static int gold_pll_set(uint32_t l)
 }
 
 /*
- * PM8998 S13 = APC1 (gold) rail, S10 = APC0 (silver): FTS2.5, range 0x40,
- * set point 0x41 (range 0: 80 mV + 5 mV steps, range 1: 160 mV + 10 mV).
- * Returns mV or 0.
+ * PM8998 S13 = APC1 (gold) rail, S10 = APC0 (silver), type 0x1C subtype
+ * 0x0A: the set point is in mV, LSB at 0x40 and MSB at 0x41 (as FTS426 in
+ * qcom_spmi-regulator.c). cpu1 read 0x0300 = 768 mV gold, 0x033C = 828 mV
+ * silver (which runs 1555.2 MHz). Returns mV or 0.
  */
 static uint32_t smps_mv(uint16_t ppid)
 {
-	int range = probe_spmi_reg(ppid, 0x40), set = probe_spmi_reg(ppid, 0x41);
-	if (range < 0 || set < 0)
+	int lsb = probe_spmi_reg(ppid, 0x40), msb = probe_spmi_reg(ppid, 0x41);
+	if (lsb < 0 || msb < 0)
 		return 0;
-	return range == 0 ? 80 + 5 * set : range == 1 ? 160 + 10 * set : 0;
+	return (uint32_t)lsb | (uint32_t)msb << 8;
 }
 
 /* Integer and memory work with a known answer: 0 = correct. */
@@ -340,10 +340,10 @@ static int stress_once(void)
 }
 
 /*
- * CPU speed page (build.sh CPU=1): the gold rail voltage the bootloader
- * left decides the highest L tried, from the msm8998 v2 perfcl CPR ceilings
- * (the worst-case voltage of each corner): <=1132.8 MHz at 828 mV, <=1728
- * at 900 mV, <=1958.4 at 952 mV. No voltage is changed.
+ * CPU speed page (build.sh CPU=1). No voltage is changed. The gold rail
+ * sits at 768 mV (cpu1), below the v2 perfcl CPR ceiling of every corner
+ * (828 mV up to 1132.8 MHz), so the steps up to 1132.8 MHz are tried with
+ * a known-answer stress test each; the first failure stops the climb.
  */
 static void __attribute__((noreturn, unused)) cpu_speed_page(void)
 {
@@ -356,31 +356,26 @@ static void __attribute__((noreturn, unused)) cpu_speed_page(void)
 		uint16_t pp = k ? 0x12f : 0x138;
 		con_hex2(k ? "S10 silv" : "S13 gold", "type=", (probe_spmi_reg(pp, 0x04) << 8) | (probe_spmi_reg(pp, 0x05) & 0xff),
 			 "en=", probe_spmi_reg(pp, 0x46));
-		con_hex2("", "rng/set=", (probe_spmi_reg(pp, 0x40) << 8) | (probe_spmi_reg(pp, 0x41) & 0xff),
-			 "mV=", smps_mv(pp));
+		uint32_t own = 0;
+		int apid = probe_spmi_owner(pp, &own);
+		con_hex2("", "mV=", smps_mv(pp), "apid/own=", ((uint32_t)apid << 8) | own);
 	}
 	con_hex2("PLL gold", "mode=", rd32(GOLD_PLL), "l=", rd32(GOLD_PLL + 4));
 	con_hex2("", "user=", rd32(GOLD_PLL + 0xc), "cfg=", rd32(GOLD_PLL + 0x10));
-	uint32_t mv = smps_mv(0x138), maxl = 0x20;
-	if (mv >= 952 && mv < 1200)
-		maxl = 0x66;
-	else if (mv >= 900 && mv < 1200)
-		maxl = 0x5a;
-	else if (mv >= 828 && mv < 1200)
-		maxl = 0x3b;
+	uint32_t mv = smps_mv(0x138), maxl = (mv >= 700 && mv < 1000) ? 0x3b : 0x20;
 	con_hex2("LIMIT", "mV=", mv, "max_l=", maxl);
 	con_skip();
 	stress_once();
-	static const uint32_t ls[] = { 0x20, 0x2f, 0x3b, 0x4e, 0x5a, 0x66 };
+	static const uint32_t ls[] = { 0x20, 0x26, 0x2a, 0x2f, 0x33, 0x37, 0x3b };
 	uint32_t best = 0x20;
 	for (unsigned i = 0; i < sizeof(ls) / sizeof(ls[0]) && ls[i] <= maxl; i++) {
 		con_hex2("TRY", "l=", ls[i], "mhz=", ls[i] * 192 / 10);
 		int ok = gold_pll_set(ls[i]);
 		int bad = 0;
-		for (int n = 0; n < 200; n++)
+		for (int n = 0; ok && n < 2000; n++)
 			bad += stress_once();
 		uint64_t t = speed_ticks();
-		con_hex2(ok ? " ok" : " NO LOCK", "ticks=", (uint32_t)t, "errors=", bad);
+		con_hex2(ok ? " ok" : " SWITCH FAILED", "ticks=", (uint32_t)t, "errors=", bad);
 		if (!ok || bad)
 			break;
 		best = ls[i];
