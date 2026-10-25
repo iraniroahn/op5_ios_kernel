@@ -45,6 +45,17 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**gfx1 RESULT (photo 2026-10-25): both work.** Display: the splash is scanned out of **VIG0**
+(addr 0x9D400000, fmt 0x237FF ARGB8888, src = out = 1080x1920, stride 0x10E0, opmode
+0x80006000, **QSEED3 v0x1002 present, op_mode 0 = off**); CTL0 layer0 0x01000005 top 0x20020;
+INTF1 timing engine off (command mode), PP0 autorefresh 0x80000001 (why CPU writes show). GPU:
+GCC gpu ahb on; **PM8005 S1 was off** (APID 0x001 owner 0, set point 0x2F0 = 752 mV), enabled
+at 700 mV (0x2BC); CX and GX GDSC on, gfx3d CBCR 0x4621 (XO), rbbmtimer on; RBBM_STATUS 1,
+STATUS3 0, CP counter 0 (CP not started): **Adreno 540 registers answer.**
+**scale1-f3c12a8d** (SCALE=1): 750x1334 test picture in the top-left of the splash buffer, VIG0
+SRC_SIZE 750x1334, QSEED3 bilinear (phase steps src<<21/dst, preload 4/3, op 0x40014401...),
+CTL0 FLUSH bit 0, 30 s, then restored with the register readback.
+
 **GPU + resolution, step 1: `shim/out/gfx1-b97cc757.img`** (GFX=1, gold at 1728 MHz). Page 1 part
 A, read only: every MDP SSPP with an address (VIG0-3 with QSEED3 version/op mode, DMA0-3), CTL0/1
 LAYER0/TOP, INTF1 enable, PP0 autorefresh: which pipe ABL scans the splash out of, and whether a

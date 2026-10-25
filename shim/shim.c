@@ -805,6 +805,15 @@ static void __attribute__((noreturn)) probe_run(uint64_t dtb)
 	(void)dtb;
 	cpu_speed_page();
 #endif
+#ifdef SCALE_PROBE
+	(void)dtb;
+	stage = "probe scale";
+	probe_scale();
+	con_skip();
+	con_str("DONE", "hold power + vol up to quit");
+	for (;;)
+		__asm__ volatile("wfe");
+#endif
 #ifdef GFX_PROBE
 	/* build.sh GFX=1: display pipes and GPU power-up; never returns */
 	(void)dtb;

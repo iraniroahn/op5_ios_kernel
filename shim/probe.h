@@ -33,3 +33,4 @@ int probe_spmi_reg(uint16_t ppid, uint8_t addr);
 int probe_spmi_owner(uint16_t ppid, uint32_t *owner);
 int probe_spmi_write(uint16_t ppid, uint8_t addr, const uint8_t *buf, unsigned n);
 void probe_gfx(void);
+void probe_scale(void);

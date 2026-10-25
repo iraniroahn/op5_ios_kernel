@@ -1426,3 +1426,87 @@ void probe_gfx(void)
 	con_skip();
 	probe_gpu();
 }
+
+/*
+ * Hardware scaling test (build.sh SCALE=1): an iPhone 8 sized test picture
+ * (750x1334, top-left of the splash buffer, same 4320-byte stride) is
+ * fetched by VIG0 and stretched to the 1080x1920 panel by its QSEED3 v1.2
+ * scaler, bilinear, as mainline dpu_hw_setup_scaler3 programs it
+ * (phase step = src << 21 / dst, preload 4/3, filter 3 = bilinear, alpha
+ * bilinear, op_mode bits 0, 14, 10). CTL0 FLUSH (0x18) bit 0 latches
+ * VIG0; PINGPONG0 autorefresh sends the frames. After 30 s everything is
+ * put back and the scaler registers as read during the test are shown.
+ */
+#define VIG0	(MDP + 0x4000)
+#define QS	(VIG0 + 0xa00)
+static void fill_rect(int x0, int y0, int w, int h, uint32_t c)
+{
+	for (int y = y0; y < y0 + h; y++) {
+		volatile uint32_t *line = con_fb + y * (FB_STRIDE / 4);
+		for (int x = x0; x < x0 + w; x++)
+			line[x] = c;
+	}
+}
+
+void probe_scale(void)
+{
+	const int sw = 750, sh = 1334, dw = 1080, dh = 1920;
+	/* picture: border, 1 px grid every 50 px, checker block, colour bars, text */
+	con_clear(0xff202040);
+	fill_rect(0, 0, sw, 4, WHITE);
+	fill_rect(0, sh - 4, sw, 4, WHITE);
+	fill_rect(0, 0, 4, sh, WHITE);
+	fill_rect(sw - 4, 0, 4, sh, WHITE);
+	for (int x = 50; x < sw; x += 50)
+		fill_rect(x, 0, 1, sh, 0xff606080);
+	for (int y = 50; y < sh; y += 50)
+		fill_rect(0, y, sw, 1, 0xff606080);
+	for (int i = 0; i < 8; i++)
+		for (int j = 0; j < 8; j++)
+			fill_rect(100 + 25 * i, 800 + 25 * j, 25, 25, ((i + j) & 1) ? WHITE : 0xff000000);
+	static const uint32_t bars[6] = { RED, GREEN, BLUE, YELLOW, 0xff00ffff, 0xffff00ff };
+	for (int i = 0; i < 6; i++)
+		fill_rect(400 + 50 * i, 800, 50, 200, bars[i]);
+	for (int i = 0; i < 300; i++)
+		fill_rect(400 + i, 1050 + i / 3, 1, 1, WHITE);	/* thin diagonal */
+	con_str("SCALE", "750x1334 test picture");
+	con_str("", "stretched by VIG0 QSEED3");
+	con_str("", "bilinear, no CPU copy");
+	con_skip();
+	con_str("LOOK", "fills the whole screen?");
+	con_str("", "edges smooth, not blocky?");
+	__asm__ volatile("dsb sy" ::: "memory");
+
+	uint32_t old_src = rd32(VIG0 + 0x00), old_op = rd32(QS + 0x04);
+	wr32(QS + 0x0c, 0);					/* PHASE_INIT */
+	wr32(QS + 0x10, (uint32_t)(((uint64_t)sw << 21) / dw));	/* PHASE_STEP_Y_H */
+	wr32(QS + 0x14, (uint32_t)(((uint64_t)sh << 21) / dh));	/* PHASE_STEP_Y_V */
+	wr32(QS + 0x18, (uint32_t)(((uint64_t)sw << 21) / dw));
+	wr32(QS + 0x1c, (uint32_t)(((uint64_t)sh << 21) / dh));
+	wr32(QS + 0x20, 4 | 3 << 8 | 4 << 16 | 3 << 24);	/* PRELOAD */
+	wr32(QS + 0x40, sw | sh << 16);				/* SRC_SIZE_Y_RGB_A */
+	wr32(QS + 0x44, sw | sh << 16);				/* SRC_SIZE_UV */
+	wr32(QS + 0x48, dw | dh << 16);				/* DST_SIZE */
+	wr32(QS + 0x04, 1u | 3u << 16 | 1u << 14 | 1u << 10 | 1u << 30);	/* OP_MODE */
+	wr32(VIG0 + 0x00, sw | sh << 16);			/* SSPP SRC_SIZE; OUT stays 1080x1920 */
+	__asm__ volatile("dsb sy" ::: "memory");
+	wr32(MDP + 0x1018, 1);					/* CTL0 FLUSH: VIG0 */
+	__asm__ volatile("dsb sy" ::: "memory");
+	delay_us(100000);
+	uint32_t r_op = rd32(QS + 0x04), r_src = rd32(VIG0 + 0x00), r_out = rd32(VIG0 + 0x0c);
+	uint32_t r_dst = rd32(QS + 0x48), r_fl = rd32(MDP + 0x1018), r_st = rd32(QS + 0x5c);
+	delay_us(30000000);
+
+	/* back to the unscaled 1080x1920 splash */
+	wr32(QS + 0x04, old_op);
+	wr32(VIG0 + 0x00, old_src);
+	__asm__ volatile("dsb sy" ::: "memory");
+	wr32(MDP + 0x1018, 1);
+	delay_us(100000);
+	con_clear(RED);
+	con_str("PROBE", "hardware scaling test, restored");
+	con_hex2("DURING", "op=", r_op, "dst=", r_dst);
+	con_hex2("", "src=", r_src, "out=", r_out);
+	con_hex2("", "flush=", r_fl, "clk_st=", r_st);
+	con_hex2("NOW", "op=", rd32(QS + 0x04), "src=", rd32(VIG0 + 0x00));
+}
