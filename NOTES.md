@@ -58,7 +58,7 @@ IOAcceleratorES (0138, no 30 s CAMetalContextCreate wait at backboardd start; sw
 off). Applied with patch -F3 then fixed by hand: topaz's scanout pool (0092/0093) is not in our
 tree, so the client-address branch skips it, and the fuzz-3 hunks of 0135/0138/0139 that landed
 in the wrong functions were moved. User does not want to test each step: one image when built.
-Built (release kernel-run40186605448, sha see SHA256SUMS). Fallback image
+Built (release kernel-run40186605448, sha 66f2a902). Fallback image
 `shim/out/ios-widgets-safe-f0a4935f.img` = kernel 0089, gold 614.4 MHz, sweetfb_hwscale=0 (only the
 keys and IOSurface changes over the last image known to boot).
 
