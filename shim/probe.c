@@ -720,8 +720,60 @@ static void tlmm_setup(void)
 	wr32(TLMM_PIN(87), 3 << 2);			/* blsp_i2c5 SDA, 2 mA, no pull */
 	wr32(TLMM_PIN(88), 3 << 2);			/* blsp_i2c5 SCL */
 	wr32(TLMM_PIN(125), (3 << 6) | 3);		/* touch irq: gpio in, 8 mA, pull-up */
-	wr32(TLMM_PIN(89) + 4, 2);			/* reset: high */
+	wr32(TLMM_PIN(89) + 4, 0);			/* reset: low until the rails are up */
 	wr32(TLMM_PIN(89), (1 << 9) | (3 << 6) | 3);	/* gpio out */
+}
+
+/*
+ * Bit-banged I2C on the same pins (func 0, open drain by toggling OE with
+ * out=0; the board pull-ups go to L6), ~100 kHz. Only to tell a QUP setup
+ * problem from a silent chip: returns 1 if addr ACKs a read address byte.
+ */
+#define BB_SDA	TLMM_PIN(87)
+#define BB_SCL	TLMM_PIN(88)
+static void bb_line(uintptr_t pin, int high)
+{
+	wr32(pin, high ? 0 : 1 << 9);
+	delay_us(5);
+}
+
+static int bb_probe(uint8_t addr)
+{
+	wr32(BB_SDA + 4, 0);
+	wr32(BB_SCL + 4, 0);
+	bb_line(BB_SDA, 1);
+	bb_line(BB_SCL, 1);
+	bb_line(BB_SDA, 0);	/* START */
+	bb_line(BB_SCL, 0);
+	uint8_t v = addr << 1 | 1;
+	for (int i = 7; i >= 0; i--) {
+		bb_line(BB_SDA, (v >> i) & 1);
+		bb_line(BB_SCL, 1);
+		bb_line(BB_SCL, 0);
+	}
+	bb_line(BB_SDA, 1);
+	bb_line(BB_SCL, 1);
+	int ack = !(rd32(BB_SDA + 4) & 1);
+	bb_line(BB_SCL, 0);
+	if (ack) {	/* clock one byte out of the slave, NACK it */
+		for (int i = 0; i < 9; i++) {
+			bb_line(BB_SCL, 1);
+			bb_line(BB_SCL, 0);
+		}
+	}
+	bb_line(BB_SDA, 0);
+	bb_line(BB_SCL, 1);
+	bb_line(BB_SDA, 1);	/* STOP */
+	return ack;
+}
+
+/* Line levels with every driver released: both should read 1 with L6 up. */
+static int bb_idle(void)
+{
+	wr32(BB_SDA, 0);
+	wr32(BB_SCL, 0);
+	delay_us(20);
+	return (rd32(BB_SDA + 4) & 1) | (rd32(BB_SCL + 4) & 1) << 1;
 }
 
 static int ts_irq(void)
@@ -856,7 +908,7 @@ static int qup_xfer(uint8_t addr, int rd, uint8_t *buf, unsigned n)
 }
 
 /* RMI4 over I2C (rmi_i2c.c): 0xff selects the page, then a 1-byte register address. */
-#define RMI_ADDR	0x20
+static uint8_t rmi_addr = 0x20;
 static int rmi_page = -1;
 
 static int rmi_set_page(int page)
@@ -864,7 +916,7 @@ static int rmi_set_page(int page)
 	if (page == rmi_page)
 		return 0;
 	uint8_t b[2] = { 0xff, (uint8_t)page };
-	int r = qup_xfer(RMI_ADDR, 0, b, 2);
+	int r = qup_xfer(rmi_addr, 0, b, 2);
 	rmi_page = r ? -1 : page;
 	return r;
 }
@@ -875,8 +927,8 @@ static int rmi_read(uint16_t a, uint8_t *buf, unsigned n)
 	if (r)
 		return r;
 	uint8_t reg8 = a & 0xff;
-	r = qup_xfer(RMI_ADDR, 0, &reg8, 1);
-	return r ? r : qup_xfer(RMI_ADDR, 1, buf, n);
+	r = qup_xfer(rmi_addr, 0, &reg8, 1);
+	return r ? r : qup_xfer(rmi_addr, 1, buf, n);
 }
 
 struct rmi_fn {
@@ -952,7 +1004,7 @@ void probe_touch(unsigned live_s)
 	con_hex2("TLMM", "sda=", rd32(TLMM_PIN(87)), "irq=", rd32(TLMM_PIN(125)));
 	con_hex2("QUP5", "hw=", rd32(QUP + 0x30), "io=", rd32(QUP + QUP_IO_MODE));
 	uint8_t pg[2] = { 0xff, 0 };
-	int r = qup_xfer(RMI_ADDR, 0, pg, 2);
+	int r = qup_xfer(rmi_addr, 0, pg, 2);
 	p = st(b, "unpowered @20: ");
 	p = r ? rerr(p, r) : st(p, "ACK (rail already on?)");
 	kv(p, " st=", qup_last_st, 8);
@@ -1004,22 +1056,69 @@ void probe_touch(unsigned live_s)
 	if (r)
 		return;
 
-	/* 3. touch rails: L6 1.8 V (vio, I2C pull-ups) then L28 3.0 V (vdd) */
-	r = rpm_ldo_on(6, 1800000, b);
-	con_str("RPM L6", b);
-	r |= rpm_ldo_on(28, 3008000, b);
+	/* 3. touch rails as tpd_hw_pwron (OnePlus s3320 driver): L28 3.0 V, 10 ms, L6 1.8 V, 10 ms */
+	r = rpm_ldo_on(28, 3008000, b);
 	con_str("RPM L28", b);
 	delay_us(10000);
-	ldo_status(0x145, b);
-	con_str("L6 sid1", b);
+	r |= rpm_ldo_on(6, 1808000, b);
+	con_str("RPM L6", b);
+	delay_us(10000);
 	ldo_status(0x15b, b);
 	con_str("L28 sid1", b);
+	ldo_status(0x145, b);
+	con_str("L6 sid1", b);
 
-	/* 4. reset pulse, boot time, then the RMI4 PDT */
+	/* 4. reset high 10 ms, low 10 ms, high; then find who answers, for 3 s */
+	wr32(TLMM_PIN(89) + 4, 2);
+	delay_us(10000);
 	wr32(TLMM_PIN(89) + 4, 0);
 	delay_us(10000);
 	wr32(TLMM_PIN(89) + 4, 2);
-	delay_us(300000);
+	con_skip();
+	uint64_t tr = now();
+	int found = -1;
+	for (int pass = 0; pass < 6; pass++) {
+		delay_us(pass ? 500000 : 100000);
+		p = b;
+		p = st(p, "t=");
+		p = dec(p, (now() - tr) / (rsr("cntfrq_el0") / 1000));
+		p = st(p, "ms irq=");
+		p = dec(p, ts_irq());
+		p = st(p, " qup:");
+		int n = 0;
+		uint32_t st0 = 0;
+		for (int a = 0x08; a < 0x78; a++) {
+			uint8_t d;
+			int rr = qup_xfer(a, 1, &d, 1);
+			if (a == 0x20)
+				st0 = rr ? qup_last_st : 0;
+			if (!rr && n++ < 4) {
+				p = hx(st(p, " "), a, 2);
+				if (found < 0 || a == 0x20)
+					found = a;
+			}
+		}
+		if (!n)
+			p = kv(p, " none st20=", st0, 8);
+		con_str(pass ? "" : "SCAN", b);
+	}
+	/* same scan bit-banged: a silent QUP but an ACK here means the QUP setup is wrong */
+	{
+		p = b;
+		p = kv(p, "idle sda|scl<<1=", bb_idle(), 1);
+		p = st(p, "ack:");
+		int n = 0;
+		for (int a = 0x08; a < 0x78; a++)
+			if (bb_probe(a) && n++ < 5)
+				p = hx(st(p, " "), a, 2);
+		if (!n)
+			st(p, " none");
+		con_str("BITBANG", b);
+		wr32(TLMM_PIN(87), 3 << 2);	/* back to blsp_i2c5 */
+		wr32(TLMM_PIN(88), 3 << 2);
+	}
+	if (found >= 0)
+		rmi_addr = found;
 	rmi_page = -1;
 	con_skip();
 	rmi_scan();

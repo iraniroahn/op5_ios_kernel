@@ -45,6 +45,16 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**Touch probe 1 RESULT (IMG_5467/5468): RPM path works.** TOC n=0xC, rx 0x900/0x6F8, tx
+0x200/0x6F8, all FIFO pointers 0 at hand-off; VERSION ok (rx cmds 1,2,2 = VERSION_ACK + RPM
+OPEN...), OPEN_ACK, rcid 3; RPM answered "msg#" to both LDO votes; L6 (apid 0x073) and L28
+(apid 0x0C2) went st 00 en 00 -> st 84 en 80. GCC clocks on, QUP5 hw 0x20070000, io_mode 0xA5.
+I2C before power: I2C_STATUS 0x001321C4 (bus error + failed: pull-ups unpowered). After
+power + reset pulse: **NACK at 0x20**, no PDT. Next: `shim/out/touch2-d6c4c18e.img` = OnePlus
+tpd_hw_pwron order (L28, 10 ms, L6 1.808 V, 10 ms, reset 1/0/1), reset held low before
+power, QUP address scan 0x08-0x77 six times over 3 s with irq level, then a bit-banged scan
+(QUP vs silent chip).
+
 **PROBE RESULTS (phone, 2026-10-23, photos IMG_5428-5431):**
 - Screen: shim text at the top edge, no shift: splash is `0x9d400000`, the command-mode
   panel shows CPU writes.
