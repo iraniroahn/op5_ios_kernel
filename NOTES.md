@@ -54,6 +54,8 @@ bit-banged scan also ACKs 0x20. PDT: F34 (q 26 ctl 0A irq 0x21), F01 (q 2A c 25 
 object. Patch **0086**: bsd/dev/sweet_rpm.c (GLINK + SMD RPM LDO votes with load) and a new
 bsd/dev/sweet_touch.c (QUP5 FIFO I2C + RMI4 F12, 5 fingers, 10 ms polling on the attention
 line), started unconditionally after the keys; SweetHID clamps to 1919 and SurfaceHeight 122 mm.
+CI run 40167218905 OK (release kernel-run40167218905, sha 7a9054dc). Boot image
+`shim/out/ios-touch-87ea1e93.img` = kernel 0086 + cb-stage2.adt, same args as ios-keys-cpus4.
 
 **Touch probe 2 RESULT (photo 2026-10-25): the S3320 is alive, then drops off.** Rails on as
 before. Scan at t=98 ms after reset: irq=0 and **0x20 ACKs** (only address). From t=614 ms on:
