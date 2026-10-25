@@ -632,27 +632,27 @@ static int glink_wait(volatile uint32_t *flag, unsigned ms)
 	return -2;
 }
 
-/* qcom_rpm_smd_write: one LDO-A resource, active set, swen=1 and uv. */
+/* qcom_rpm_smd_write: one LDO-A resource, active set, swen=1, uv and ma (load). */
 static uint32_t rpm_msg_id = 1;
-static int rpm_ldo_on(uint32_t ldo, uint32_t uv, char *b)
+static int rpm_ldo_on(uint32_t ldo, uint32_t uv, uint32_t ma, char *b)
 {
-	uint32_t w[18];
+	uint32_t w[20];
 	unsigned n = 0;
 	w[n++] = 9;			/* TX_DATA, lcid 1 (param1 << 16) */
 	w[n - 1] |= 1u << 16;
 	w[n++] = 0;			/* iid: intentless */
-	w[n++] = 52;			/* chunk_size */
+	w[n++] = 64;			/* chunk_size */
 	w[n++] = 0;			/* left_size */
 	w[n++] = 0x00716572;		/* "req" */
-	w[n++] = 20 + 24;
+	w[n++] = 20 + 36;
 	w[n++] = rpm_msg_id++;
 	w[n++] = 0;			/* active state */
 	w[n++] = 0x616f646c;		/* "ldoa" */
 	w[n++] = ldo;
-	w[n++] = 24;
+	w[n++] = 36;
 	w[n++] = 0x6e657773; w[n++] = 4; w[n++] = 1;	/* swen */
 	w[n++] = 0x00007675; w[n++] = 4; w[n++] = uv;	/* uv */
-	w[n++] = 0;			/* pad 68 -> 72 bytes */
+	w[n++] = 0x0000616d; w[n++] = 4; w[n++] = ma;	/* ma: above the LPM limit -> HPM */
 	gdata_len = 0;
 	char *p = b;
 	if (glink_tx(w, n) < 0)
@@ -1057,10 +1057,10 @@ void probe_touch(unsigned live_s)
 		return;
 
 	/* 3. touch rails as tpd_hw_pwron (OnePlus s3320 driver): L28 3.0 V, 10 ms, L6 1.8 V, 10 ms */
-	r = rpm_ldo_on(28, 3008000, b);
+	r = rpm_ldo_on(28, 3008000, 20, b);
 	con_str("RPM L28", b);
 	delay_us(10000);
-	r |= rpm_ldo_on(6, 1808000, b);
+	r |= rpm_ldo_on(6, 1808000, 40, b);
 	con_str("RPM L6", b);
 	delay_us(10000);
 	ldo_status(0x15b, b);
@@ -1077,7 +1077,7 @@ void probe_touch(unsigned live_s)
 	con_skip();
 	uint64_t tr = now();
 	int found = -1;
-	for (int pass = 0; pass < 6; pass++) {
+	for (int pass = 0; pass < 5; pass++) {
 		delay_us(pass ? 500000 : 100000);
 		p = b;
 		p = st(p, "t=");
@@ -1101,6 +1101,12 @@ void probe_touch(unsigned live_s)
 		if (!n)
 			p = kv(p, " none st20=", st0, 8);
 		con_str(pass ? "" : "SCAN", b);
+		uint32_t own;
+		p = st(b, "rails L28 st=");
+		p = hx(p, spmi_rd(spmi_apid(0x15b, &own), 0x08), 2);
+		p = st(p, " L6 st=");
+		hx(p, spmi_rd(spmi_apid(0x145, &own), 0x08), 2);
+		con_str("", b);
 	}
 	/* same scan bit-banged: a silent QUP but an ACK here means the QUP setup is wrong */
 	{

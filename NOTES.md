@@ -45,6 +45,14 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**Touch probe 2 RESULT (photo 2026-10-25): the S3320 is alive, then drops off.** Rails on as
+before. Scan at t=98 ms after reset: irq=0 and **0x20 ACKs** (only address). From t=614 ms on:
+irq=1 and nothing ACKs (I2C_STATUS 0x0D1343C8 = NACK); bit-banged scan: lines idle high,
+no ACK either. So the QUP setup is fine; the chip dies after its boot. Likely cause: the RPM
+votes had no load ("ma"), so the LDOs stay in low-power mode and sag when the chip starts
+scanning (downstream sets 20 mA on L28, 40 mA on L6). `shim/out/touch3-35ab6673.img` adds ma
+(L28 20, L6 40) and prints the LDO status every scan pass.
+
 **Touch probe 1 RESULT (IMG_5467/5468): RPM path works.** TOC n=0xC, rx 0x900/0x6F8, tx
 0x200/0x6F8, all FIFO pointers 0 at hand-off; VERSION ok (rx cmds 1,2,2 = VERSION_ACK + RPM
 OPEN...), OPEN_ACK, rcid 3; RPM answered "msg#" to both LDO votes; L6 (apid 0x073) and L28
