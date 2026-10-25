@@ -1,0 +1,194 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index c80847d..62da020 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -11,6 +11,12 @@
+  * Reports: F12 Data1, 8 bytes per object (type, x lo/hi, y lo/hi, z, wx,
+  * wy) at the F12 data base, panel pixels 1080x1920. Only IC write: the RMI
+  * page select register.
++ *
++ * The two capacitive keys beside the home button are F1A (page 2, data
++ * byte 0: bit 1 left, bit 0 right, as the OnePlus s3508 driver reads them).
++ * Right = iPhone Home (HID Menu; a double press opens the app switcher),
++ * left = Back, sent as a quick swipe in from the left edge (UIKit's back
++ * gesture). Boot-arg sweetkeyswap=1 swaps the two.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -27,6 +33,7 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ extern kern_return_t thread_terminate(thread_t);
+ extern int sweet_rpm_ldo(uint32_t ldo, uint32_t uv, uint32_t ma);
+ extern void sweet_hid_touch(int finger, int down, int x, int y);
++extern void sweet_hid_key(int key, int down);
+ void sweet_touch_init(void);
+ 
+ #define TOUCH_GCC_PA     0x00100000u
+@@ -57,7 +64,8 @@ void sweet_touch_init(void);
+ #define QUP_I2C_CLK      0x400u
+ #define QUP_I2C_STATUS   0x404u
+ #define QUP_MASTER_GEN   0x408u
+-#define QUP_CLK_100K     ((3u << 8) | 93u)     /* hs_div 3, fs_div 19.2M/100k/2-3 */
++/* 400 kHz as the DT (33/66 duty): fs_div (19.2M/400k - 6) * 2/3 = 28, hs_div 3 */
++#define QUP_CLK_400K     ((14u << 16) | (3u << 8) | 28u)
+ #define QUP_I2C_ERRORS   0x38000fcu
+ #define QUP_I2C_NACK     (1u << 3)
+ #define QUP_BUS_ACTIVE   (1u << 8)
+@@ -65,6 +73,7 @@ void sweet_touch_init(void);
+ struct rmi_fn {
+ 	uint8_t num;
+ 	uint16_t query, ctrl, data;
++	uint32_t irq;           /* its bits in F01 interrupt status (PDT order) */
+ };
+ 
+ static struct {
+@@ -72,8 +81,11 @@ static struct {
+ 	bool started;
+ 	int page;
+ 	uint32_t last_status;
+-	struct rmi_fn f01, f12;
++	struct rmi_fn f01, f12, f1a;
+ 	uint32_t active;
++	uint8_t keys;           /* last F1A byte */
++	int key_swap;
++	bool back_pending;
+ 	int x[TOUCH_MAX], y[TOUCH_MAX];
+ } st = { .page = -1 };
+ static int touch_sleep_chan;
+@@ -194,7 +206,7 @@ qup_xfer(uint8_t addr, bool rd, uint8_t *buf, unsigned n)
+ 	if (!qup_go(1)) {
+ 		return EIO;
+ 	}
+-	touch_wr(st.qup, QUP_I2C_CLK, QUP_CLK_100K);
++	touch_wr(st.qup, QUP_I2C_CLK, QUP_CLK_400K);
+ 	if (!qup_go(3)) {
+ 		return EIO;
+ 	}
+@@ -270,6 +282,7 @@ rmi_read(uint16_t a, uint8_t *buf, unsigned n)
+ static int
+ rmi_scan(void)
+ {
++	unsigned irq_pos = 0;
+ 	for (int page = 0; page < 4; ++page) {
+ 		for (int a = 0xe9; a > 0x0a; a -= 6) {
+ 			uint8_t e[6];
+@@ -280,15 +293,19 @@ rmi_scan(void)
+ 			if (!e[5] || e[5] == 0xff) {
+ 				break;
+ 			}
+-			printf("SWEET TOUCH: F%02x page %d query %#x ctrl %#x data %#x irqs %u\n",
+-			    e[5], page, e[0], e[2], e[3], e[4] & 7);
+-			struct rmi_fn *f = e[5] == 0x01 ? &st.f01 : e[5] == 0x12 ? &st.f12 : NULL;
++			unsigned nirq = e[4] & 7u;
++			printf("SWEET TOUCH: F%02x page %d query %#x ctrl %#x data %#x irqs %u at bit %u\n",
++			    e[5], page, e[0], e[2], e[3], nirq, irq_pos);
++			struct rmi_fn *f = e[5] == 0x01 ? &st.f01 : e[5] == 0x12 ? &st.f12 :
++			    e[5] == 0x1a ? &st.f1a : NULL;
+ 			if (f) {
+ 				f->num = e[5];
+ 				f->query = (uint16_t)(page << 8 | e[0]);
+ 				f->ctrl = (uint16_t)(page << 8 | e[2]);
+ 				f->data = (uint16_t)(page << 8 | e[3]);
++				f->irq = ((1u << nirq) - 1u) << irq_pos;
+ 			}
++			irq_pos += nirq;
+ 		}
+ 	}
+ 	return 0;
+@@ -312,6 +329,43 @@ touch_report(uint32_t mask, const int *x, const int *y)
+ 	st.active = mask;
+ }
+ 
++/* Capacitive keys: right = Home (held as long as the key), left = Back. */
++static void
++touch_keys(uint8_t keys)
++{
++	uint8_t home = st.key_swap ? 2u : 1u, back = st.key_swap ? 1u : 2u;
++	uint8_t changed = keys ^ st.keys;
++	if (changed) {
++		printf("SWEET TOUCH: keys %#x\n", keys);
++	}
++	if (changed & home) {
++		sweet_hid_key(3, (keys & home) != 0);
++	}
++	if ((changed & back) && (keys & back)) {
++		st.back_pending = true;
++	}
++	st.keys = keys;
++}
++
++/*
++ * Back: a finger the panel never uses (id 9) swipes in from the left edge,
++ * 2 px to 840 px in about 130 ms at mid height. SweetHID marks a touch that
++ * starts within 48 px of an edge as an edge touch, which UIKit's
++ * interactive pop gesture (and Safari's back swipe) look for.
++ */
++static void
++touch_back_swipe(void)
++{
++	const int id = 9, y = TOUCH_H / 2;
++	sweet_hid_touch(id, 1, 2, y);
++	for (int i = 1; i <= 12; ++i) {
++		touch_wait(11);
++		sweet_hid_touch(id, 1, 2 + 70 * i, y);
++	}
++	touch_wait(11);
++	sweet_hid_touch(id, 0, 842, y);
++}
++
+ static int
+ touch_poll(void)
+ {
+@@ -319,9 +373,22 @@ touch_poll(void)
+ 	int x[TOUCH_MAX], y[TOUCH_MAX];
+ 	uint32_t mask = 0;
+ 	int err = rmi_read(st.f01.data + 1, &is, 1);    /* interrupt status: reading clears it */
+-	if (!err) {
+-		err = rmi_read(st.f12.data, d, sizeof(d));
++	if (err) {
++		return err;
+ 	}
++	if (st.f1a.num && (is & st.f1a.irq)) {
++		uint8_t keys;
++		err = rmi_read(st.f1a.data, &keys, 1);
++		if (err) {
++			return err;
++		}
++		touch_keys(keys & 3u);
++	}
++	/* Fingers only when F12 flagged new data, or while some are down. */
++	if (st.f12.irq && !(is & st.f12.irq) && !st.active) {
++		return 0;
++	}
++	err = rmi_read(st.f12.data, d, sizeof(d));
+ 	if (err) {
+ 		return err;
+ 	}
+@@ -397,7 +464,8 @@ touch_thread(void *arg, wait_result_t result)
+ 			id[i] = (q[11 + i] >= 0x20 && q[11 + i] < 0x7f) ? (char)q[11 + i] : 0;
+ 		}
+ 		id[10] = 0;
+-		printf("SWEET TOUCH: Synaptics mfr %#x product \"%s\", polling every 10 ms\n", q[0], id);
++		printf("SWEET TOUCH: Synaptics mfr %#x product \"%s\", polling every 10 ms, F12 irq %#x, F1A irq %#x\n",
++		    q[0], id, st.f12.irq, st.f1a.irq);
+ 	}
+ 	unsigned errors = 0;
+ 	for (;;) {
+@@ -416,6 +484,10 @@ touch_thread(void *arg, wait_result_t result)
+ 				errors = 0;
+ 			}
+ 		}
++		if (st.back_pending && !st.active) {
++			st.back_pending = false;
++			touch_back_swipe();
++		}
+ 		touch_wait(10);
+ 	}
+ out:
+@@ -433,6 +505,7 @@ sweet_touch_init(void)
+ 	}
+ 	st.started = true;
+ 	(void)PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
++	(void)PE_parse_boot_argn("sweetkeyswap", &st.key_swap, sizeof(st.key_swap));
+ 	if (!enabled) {
+ 		printf("SWEET TOUCH: disabled (sweettouch=0)\n");
+ 		return;
