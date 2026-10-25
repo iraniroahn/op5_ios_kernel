@@ -51,7 +51,10 @@ irq=1 and nothing ACKs (I2C_STATUS 0x0D1343C8 = NACK); bit-banged scan: lines id
 no ACK either. So the QUP setup is fine; the chip dies after its boot. Likely cause: the RPM
 votes had no load ("ma"), so the LDOs stay in low-power mode and sag when the chip starts
 scanning (downstream sets 20 mA on L28, 40 mA on L6). `shim/out/touch3-35ab6673.img` adds ma
-(L28 20, L6 40) and prints the LDO status every scan pass.
+(L28 20, L6 40) and prints the LDO status every scan pass. Superseded before it ran by
+`shim/out/touch4-561f2aad.img`: same plus no 20 s hold, never resets (hold power + vol up =
+bootloader, avoids the fastbootd landing), live monitor of chip/irq/rails with PDT rescan.
+`tools/fbtest.sh IMAGE` = one command per test on the Mac.
 
 **Touch probe 1 RESULT (IMG_5467/5468): RPM path works.** TOC n=0xC, rx 0x900/0x6F8, tx
 0x200/0x6F8, all FIFO pointers 0 at hand-off; VERSION ok (rx cmds 1,2,2 = VERSION_ACK + RPM

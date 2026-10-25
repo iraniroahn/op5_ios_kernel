@@ -638,15 +638,17 @@ void shim_main(uint64_t dtb)
  */
 static void __attribute__((noreturn)) probe_run(uint64_t dtb)
 {
-	probe_hold(20);
 #ifdef TOUCH_PROBE
-	/* build.sh TOUCH=1: only the touch bring-up page */
+	/* build.sh TOUCH=1: only the touch page; it never returns (hold power + vol up) */
+	(void)dtb;
 	stage = "probe touch";
 	con_clear(RED);
 	con_str("PROBE", "touch: RPM rails, QUP5 I2C, RMI4");
-	probe_touch(60);
-	probe_hold(60);
-	reset(20);
+	probe_touch(0);
+	for (;;)
+		__asm__ volatile("wfe");
+#else
+	probe_hold(20);
 #endif
 
 	stage = "probe cpus";

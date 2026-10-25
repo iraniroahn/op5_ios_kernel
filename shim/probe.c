@@ -1146,20 +1146,52 @@ void probe_touch(unsigned live_s)
 		con_str("F01", b);
 	}
 	if (!f12) {
-		con_str("F12", "not found: no live view");
+		/* monitor: chip ack, irq, rails; rescan the PDT whenever 0x20 answers again */
+		con_skip();
+		con_str("DONE", "hold power + vol up for the bootloader");
+		con_str("MONITOR", "F12 not found: watching the chip");
+		int row = con_row_get();
+		uint64_t t0 = now();
+		for (;;) {
+			uint8_t d;
+			int rr = qup_xfer(rmi_addr, 1, &d, 1);
+			uint32_t own;
+			con_row_set(row);
+			p = st(b, "t=");
+			p = dec(p, (now() - t0) / rsr("cntfrq_el0"));
+			p = st(p, "s irq=");
+			p = dec(p, ts_irq());
+			p = st(p, rr ? " chip: silent" : " chip: ACK");
+			p = st(p, " L28=");
+			p = hx(p, spmi_rd(spmi_apid(0x15b, &own), 0x08), 2);
+			p = st(p, " L6=");
+			p = hx(p, spmi_rd(spmi_apid(0x145, &own), 0x08), 2);
+			st(p, "    ");
+			con_str("", b);
+			if (!rr) {
+				rmi_page = -1;
+				rmi_scan();
+				if (rmi_find(0x12))
+					break;
+			}
+			delay_us(200000);
+		}
+		f01 = rmi_find(0x01);
+		f12 = rmi_find(0x12);
+	}
+	if (!f01) {
+		con_str("F01", "not found: no live view");
 		return;
 	}
 
 	/* 5. live: irq line, F01 interrupt status (reading clears it), F12 data bytes */
 	con_skip();
-	p = st(b, "touch the screen for ");
-	p = dec(p, live_s);
-	st(p, " s");
-	con_str("TOUCH", b);
+	con_str("DONE", "hold power + vol up for the bootloader");
+	con_str("TOUCH", "touch the screen now");
 	int row = con_row_get();
 	uint64_t t0 = now(), end = t0 + rsr("cntfrq_el0") * live_s;
 	unsigned events = 0;
-	while (now() < end) {
+	while (!live_s || now() < end) {
 		uint8_t is = 0, d[12];
 		int irq = ts_irq();
 		if (!irq)
