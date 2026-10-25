@@ -1231,3 +1231,10 @@ void probe_touch(unsigned live_s)
 		delay_us(50000);
 	}
 }
+
+/* One PMIC register by PPID (SID << 8 | peripheral), for shim.c; <0 on error. */
+int probe_spmi_reg(uint16_t ppid, uint8_t addr)
+{
+	uint32_t own;
+	return spmi_rd(spmi_apid(ppid, &own), addr);
+}

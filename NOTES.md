@@ -45,6 +45,20 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**iOS with touch (ios-touch-87ea1e93, video 2026-10-25 20:47): touch works in iOS** (Spotlight,
+keyboard typing, Safari, Control Center, Focus). Problems reported: input lag (slow UI), widgets
+are blank white tiles (topaz fixed widgets with the SweetSurface patches 0131-0139, not in our
+series), resolution looks poor (nearest 1.44x upscale), no way home except both volume keys.
+Patch **0087** (CI run 40182485472): capacitive keys = F1A page 2 data 0 (bit 1 left, bit 0
+right, OnePlus int_key_report_s3508): right = Home (Menu; double = app switcher), left = Back
+as an injected edge swipe (finger 9, x 2 -> 842 in ~130 ms), sweetkeyswap=1 swaps; I2C at
+400 kHz; F12/F1A read only when their F01 interrupt bits (PDT order) are set.
+**CPU speed probe `shim/out/cpu1-d7e7a375.img`** (CPU=1 shim/build.sh): reads the gold rail
+(PM8998 S13 = APC1, ppid 0x138, FTS2.5 range 0x40 / set 0x41) and SAW4 PMIC_STS 0x17812c18,
+then raises the gold PLL (clock-osm.c setup sequence, while gold runs on GPLL0) only up to the
+v2 perfcl CPR ceiling for that voltage (828 mV -> 1132.8 MHz, 900 -> 1728, 952 -> 1958.4),
+with a known-answer stress test per step and a live stress counter.
+
 **🎉 TOUCH WORKS IN THE SHIM (touch3-35ab6673, photo IMG_5471 + video IMG_5472, 2026-10-25).**
 With the "ma" load votes the chip stays up: L28/L6 st 0x94, 0x20 ACKs on every pass, irq low,
 bit-banged scan also ACKs 0x20. PDT: F34 (q 26 ctl 0A irq 0x21), F01 (q 2A c 25 ctl 0E d 04),

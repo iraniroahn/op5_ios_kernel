@@ -8,6 +8,7 @@
 #   EMBED=1 shim/build.sh PAYLOAD.bin   payload appended to the Image behind _end
 #                                 instead (topaz style), if ABL drops the ramdisk
 #   TOUCH=1 shim/build.sh         probe image with only the touch bring-up page
+#   CPU=1 shim/build.sh           probe image with only the gold CPU speed page
 #   DTB=path shim/build.sh ...    appended DTB(s); default: the stock boot.img's,
 #                                 from tools/unpack_bootv0.py
 set -euo pipefail
@@ -16,6 +17,7 @@ CC=aarch64-linux-gnu-gcc
 OBJCOPY=aarch64-linux-gnu-objcopy
 CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
 [ "${TOUCH:-0}" = 1 ] && CFLAGS="$CFLAGS -DTOUCH_PROBE"
+[ "${CPU:-0}" = 1 ] && CFLAGS="$CFLAGS -DCPU_PROBE"
 SRCS="start.S shim.c console.c mmu.c fdt.c loader.c ufs.c probe.c"
 DTB=${DTB:-../dtb/boot_unpacked/dtb}
 [ -f "$DTB" ] || { echo "error: no DTB at $DTB (run tools/unpack_bootv0.py on your stock boot.img, or set DTB=)" >&2; exit 1; }
