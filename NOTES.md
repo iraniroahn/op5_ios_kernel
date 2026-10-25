@@ -45,6 +45,16 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**Patch 0089: topaz IOSurface fixes 0131-0139 ported (blank widgets/icons).** No zeroed clients
+(0131), IOSurfaceWrapClientImage/Memory (0132), surface values / bulk attachments /
+purgeability / accelerator / YCbCr (0133), IOSurfaceAddress surfaces around the creator's own
+memory, sized by IOSurfaceAllocSize and published with an id (0134/0135/0139), trap 4/5
+detach semantics (0135/0136), zombie state pages for the last 256 views (0137), empty
+IOAcceleratorES (0138, no 30 s CAMetalContextCreate wait at backboardd start; sweetaccel=0
+off). Applied with patch -F3 then fixed by hand: topaz's scanout pool (0092/0093) is not in our
+tree, so the client-address branch skips it, and the fuzz-3 hunks of 0135/0138/0139 that landed
+in the wrong functions were moved. User does not want to test each step: one image when built.
+
 **Patch 0088: hardware scaling in iOS** (user: skip scale1, test directly). SweetFramebuffer: with
 fScaled and boot-arg sweetfb_hwscale (default 1), the first frame checks VIG0 (QSEED3 0x1002,
 src = out = 1080x1920), blacks the 750x1334 area, programs QSEED3 bilinear + VIG0 SRC_SIZE
