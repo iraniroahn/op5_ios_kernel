@@ -50,6 +50,8 @@ fScaled and boot-arg sweetfb_hwscale (default 1), the first frame checks VIG0 (Q
 src = out = 1080x1920), blacks the 750x1334 area, programs QSEED3 bilinear + VIG0 SRC_SIZE
 750x1334 + CTL0 FLUSH; from then on presentScaled copies the frame 1:1 into the top-left of the
 panel buffer (1M pixels per frame instead of 2M gathered writes). sweetfb_hwscale=0 = old path.
+Built (release kernel-run40185657119, sha b33761a3); boot image `shim/out/ios-hwscale-0d15ad00.img`
+= kernel 0088 + GOLD_L=0x5a GOLD_MV=912. GPU firmware received (research/op5fw, not in git).
 
 **gfx1 RESULT (photo 2026-10-25): both work.** Display: the splash is scanned out of **VIG0**
 (addr 0x9D400000, fmt 0x237FF ARGB8888, src = out = 1080x1920, stride 0x10E0, opmode
