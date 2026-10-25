@@ -45,6 +45,16 @@ are on SID 1, so L6 = ppid 0x145, L28 = 0x15b; the 2026-10-23 probe used SID 0 p
 "L28 apid 0x092" line was another peripheral); reset pulse; RMI4 PDT scan pages 0-3, F01
 product ID; 60 s live view (irq level, F01 irq status, raw F12 data bytes).
 
+**🎉 TOUCH WORKS IN THE SHIM (touch3-35ab6673, photo IMG_5471 + video IMG_5472, 2026-10-25).**
+With the "ma" load votes the chip stays up: L28/L6 st 0x94, 0x20 ACKs on every pass, irq low,
+bit-banged scan also ACKs 0x20. PDT: F34 (q 26 ctl 0A irq 0x21), F01 (q 2A c 25 ctl 0E d 04),
+**F12 (q 47 ctl 15 d 06)** page 0, F54 page 1, F1A page 2, F55 page 3. F01 mfr 1, product
+**"s3508"** (S3508, not S3320), read tag 0x1587. Finger on the lower left: F12 data at 0x06 =
+`01 85 01 2B 06 36 04 04` -> type 1, x 389, y 1579: native 1080x1920 panel pixels, 8 bytes per
+object. Patch **0086**: bsd/dev/sweet_rpm.c (GLINK + SMD RPM LDO votes with load) and a new
+bsd/dev/sweet_touch.c (QUP5 FIFO I2C + RMI4 F12, 5 fingers, 10 ms polling on the attention
+line), started unconditionally after the keys; SweetHID clamps to 1919 and SurfaceHeight 122 mm.
+
 **Touch probe 2 RESULT (photo 2026-10-25): the S3320 is alive, then drops off.** Rails on as
 before. Scan at t=98 ms after reset: irq=0 and **0x20 ACKs** (only address). From t=614 ms on:
 irq=1 and nothing ACKs (I2C_STATUS 0x0D1343C8 = NACK); bit-banged scan: lines idle high,
